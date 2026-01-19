@@ -2,14 +2,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   AppMode, NavTab, ImageSize, AspectRatio, PosterConfig, 
-  CameraFacingMode, GeneratedImage, 
-  ModelConfig, FramingType, EyewearCategory, ClothingStyle, PoseStyle, HandAction, EthnicityType, LightingType
+  GeneratedImage, ModelConfig, EyewearType,
+  EthnicityType, LightingType, FramingType, CommercialStyle, ModelVibe
 } from './types';
 import { 
   generateEyewearImage, 
   generatePosterImage, 
-  ensureApiKey,
-  analyzeEyewearAndSuggestScene
+  ensureApiKey 
 } from './services/geminiService';
 import { Button } from './components/Button';
 import { FeatureCard } from './components/FeatureCard';
@@ -20,128 +19,51 @@ const convertBlobToBase64 = (blob: Blob): Promise<string> => {
     const reader = new FileReader();
     reader.onerror = reject;
     reader.onload = () => {
-      const result = reader.result as string;
-      const base64 = result.split(',')[1];
-      resolve(base64);
+      const result = (reader.result as string).split(',')[1];
+      resolve(result);
     };
     reader.readAsDataURL(blob);
   });
 };
 
 const LOADING_MESSAGES = [
-  "正在构建光路方案...",
-  "同步商业级肤质修饰...",
-  "物理光学环境检测...",
-  "导出 8K 行业级视觉资产..."
+  "正在初始化 [CORE DIRECTIVE] 物理锁定引擎...",
+  "分析眼镜 PBR 材质与镜片折射属性...",
+  "配置 85mm 商业人像摄影镜头逻辑...",
+  "执行分层权重渲染 (Primary: Eyewear)...",
+  "同步 8K 高保真肤质修饰方案..."
 ];
 
-interface SceneDef {
-  id: string;
-  displayName: string;
-  uiDescription: string;
-  promptFragment: string;
-  recommendedLighting: LightingType;
-  recommendedFraming: FramingType;
-  category: EyewearCategory[];
-}
-
-const EYEWEAR_SCENES: SceneDef[] = [
-  {
-    id: "modern_office",
-    displayName: "现代办公落地窗",
-    uiDescription: "柔和自然光，专业感极强的简约空间",
-    promptFragment: "A contemporary corner office with floor-to-ceiling windows revealing an urban skyline. Interior features pristine white walls, charcoal gray polished concrete floors, and minimalist furniture. Natural daylight floods from the southwest creating soft directional illumination.",
-    recommendedLighting: "Softbox Diffused",
-    recommendedFraming: "Bust Shot",
-    category: ["Fashion Optical", "Luxury"]
-  },
-  {
-    id: "executive_library",
-    displayName: "私人图书室",
-    uiDescription: "温暖书香氛围，彰显知性气质",
-    promptFragment: "Intimate private library with floor-to-ceiling dark walnut bookshelves. Mahogany reading desk with warm wood patina and a green-shaded banker's lamp. Natural afternoon sunlight diffuses through sheer linen curtains.",
-    recommendedLighting: "Golden Hour",
-    recommendedFraming: "Close-up",
-    category: ["Fashion Optical", "Vintage"]
-  },
-  {
-    id: "coastal_terrace",
-    displayName: "海滨露台",
-    uiDescription: "地中海日光，极致度假美学",
-    promptFragment: "Mediterranean terrace overlooking turquoise ocean during golden hour. Sun-bleached teak decking, white-washed stone walls glowing with amber light. The sky transitions from orange to lavender.",
-    recommendedLighting: "Golden Hour",
-    recommendedFraming: "Close-up",
-    category: ["Sunglasses", "Luxury"]
-  },
-  {
-    id: "urban_loft",
-    displayName: "工业风街区",
-    uiDescription: "原生砖石质感，都市前卫风格",
-    promptFragment: "Authentic urban loft with exposed red brick walls and large steel-framed windows. Raw wooden ceiling joists and polished concrete floors reflect warm amber glow from vintage Edison bulbs.",
-    recommendedLighting: "Neon Noir",
-    recommendedFraming: "Bust Shot",
-    // Fix: changed "Street" to "Sunglasses" to match EyewearCategory type
-    category: ["Fashion Optical", "Sunglasses"]
-  },
-  {
-    id: "gym_modern",
-    displayName: "现代健身房",
-    uiDescription: "专业动态空间，彰显活力能量",
-    promptFragment: "Modern minimalist gym with high-tech equipment in soft focus. Bright LED studio lighting provides clean even illumination. Non-slip charcoal rubber flooring showing subtle texture.",
-    recommendedLighting: "Softbox Diffused",
-    recommendedFraming: "Upper Body",
-    category: ["Sports"]
-  },
-  {
-    id: "retro_bar",
-    displayName: "复古爵士吧",
-    uiDescription: "怀旧电影感，经典的皮质与胡桃木",
-    promptFragment: "Deep walnut wood paneling and aged leather booths. Warm tungsten lighting creates dramatic shadows. A slight haze in the air adds cinematic depth. Brass accents catch subtle glints.",
-    recommendedLighting: "Rembrandt",
-    recommendedFraming: "Bust Shot",
-    category: ["Vintage", "Luxury"]
-  }
+const EYEWEAR_SCENES = [
+  { name: "侘寂风水泥背景", prompt: "Minimalist concrete studio, wabi-sabi textures, limestone gray, micro-cement floor." },
+  { name: "极简无缝墙", prompt: "Pure off-white infinity cove studio, clinical commercial lighting." },
+  { name: "现代办公视窗", prompt: "Contemporary executive office, high-rise urban skyline view, natural sunlight." },
+  { name: "私人图书室", prompt: "Walnut bookshelves, leather-bound books, low-key scholarly atmosphere." },
+  { name: "阳光露台", prompt: "Stucco wall terrace, golden hour sunset, cinematic long shadows." },
+  { name: "工业风天台", prompt: "Urban rooftop, brutalist architecture, high-contrast sky." }
 ];
-
-const RATIO_MAP: Record<AspectRatio, string> = { 
-  '1:1': '1:1 (社交贴图)', '3:4': '3:4 (电商详情)', '9:16': '9:16 (全屏/Stories)', '16:9': '16:9 (Banner)', '4:3': '4:3 (标准肖像)' 
-};
-
-const FRAMING_ICONS: Record<FramingType, React.ReactNode> = {
-  'Close-up': <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/><rect x="4" y="2" width="16" height="20" rx="2" strokeDasharray="2 2"/></svg>,
-  'Bust Shot': <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/><path d="M19 14v1a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-1"/><rect x="4" y="1" width="16" height="22" rx="2" strokeDasharray="2 2"/></svg>,
-  'Upper Body': <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/><path d="M12 6v8"/><path d="M8 8h8"/><rect x="3" y="1" width="18" height="18" rx="2" strokeDasharray="2 2"/></svg>,
-  'Full Body': <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/><path d="M12 6v10"/><path d="M6 9l6-2 6 2"/><rect x="2" y="1" width="20" height="22" rx="2" strokeDasharray="2 2"/></svg>
-};
 
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<NavTab>(NavTab.CREATE);
   const [mode, setMode] = useState<AppMode>(AppMode.DASHBOARD);
+  const [activeTab, setActiveTab] = useState<NavTab>(NavTab.CREATE);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string>('');
-  const [imageSize, setImageSize] = useState<ImageSize>('1K');
-  const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<GeneratedImage[]>([]);
-  
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [facingMode, setFacingMode] = useState<CameraFacingMode>('environment');
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
-  
+  const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<GeneratedImage[]>([]);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
-    category: 'Fashion Optical',
-    clothingStyle: 'Business',
-    poseStyle: 'Professional',
-    handAction: 'None',
+    eyewearType: 'Auto-detect',
+    visualPurpose: 'Brand Campaign',
+    modelVibe: 'Calm & Intellectual',
     ethnicity: 'East Asian',
     gender: 'Female',
-    scene: EYEWEAR_SCENES[0].promptFragment,
+    age: 'Adult',
+    scene: EYEWEAR_SCENES[0].prompt,
     framing: 'Close-up',
     camera: 'Hasselblad H6D',
     lens: '85mm f/1.4',
@@ -152,168 +74,132 @@ const App: React.FC = () => {
   });
 
   const [posterConfig, setPosterConfig] = useState<PosterConfig>({
-    title: 'THE VISIONARY', subtitle: 'Autumn/Winter 25', layout: 'Centered',
-    typography: 'Classic Serif', integration: 'Etched into Material',
-    material: 'Brutalist Concrete', tone: 'Luxury', includeModel: false,
-    camera: 'Hasselblad H6D', lens: '85mm f/1.4', lighting: 'Softbox Diffused', mood: 'Natural Soft'
+    title: 'THE VISIONARY',
+    subtitle: 'Crafted Excellence',
+    layout: 'Centered',
+    typography: 'Classic Serif',
+    integration: 'Etched into Material',
+    material: 'Brutalist Concrete',
+    tone: 'Luxury',
+    includeModel: false,
+    camera: 'Hasselblad H6D',
+    lens: '85mm f/1.4',
+    lighting: 'Softbox Diffused',
+    mood: 'Natural Soft'
   });
 
   useEffect(() => {
     let interval: any;
     if (isGenerating) {
-      interval = setInterval(() => {
-        setLoadingStep(prev => (prev + 1) % LOADING_MESSAGES.length);
-      }, 3000);
-    } else {
-      setLoadingStep(0);
+      interval = setInterval(() => setLoadingStep(prev => (prev + 1) % LOADING_MESSAGES.length), 3000);
     }
     return () => clearInterval(interval);
   }, [isGenerating]);
-
-  const stopCamera = useCallback(() => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-    setIsCameraOpen(false);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    if (isCameraOpen && videoRef.current) {
-      const startStream = async () => {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
-            audio: false
-          });
-          if (!active) {
-            stream.getTracks().forEach(t => t.stop());
-            return;
-          }
-          streamRef.current = stream;
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            videoRef.current.play().catch(e => console.error("Camera fail", e));
-          }
-        } catch (err) {
-          setError("无法访问相机");
-          setIsCameraOpen(false);
-        }
-      };
-      startStream();
-    }
-    return () => { active = false; };
-  }, [isCameraOpen, facingMode]);
-
-  const capturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        if (facingMode === 'user') { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
-        ctx.drawImage(video, 0, 0);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-        setPreviewUrl(dataUrl);
-        setImageBase64(dataUrl.split(',')[1]);
-        stopCamera();
-        setGeneratedImage(null);
-        setMode(AppMode.DASHBOARD);
-      }
-    }
-  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
       const file = e.target.files[0];
       setPreviewUrl(URL.createObjectURL(file));
-      const base64 = await convertBlobToBase64(file);
-      setImageBase64(base64);
+      setImageBase64(await convertBlobToBase64(file));
       setGeneratedImage(null);
       setMode(AppMode.DASHBOARD);
     }
   };
 
+  const handleRun = async (type: string) => {
+    setIsGenerating(true);
+    setError(null);
+    try {
+      await ensureApiKey();
+      let url = '';
+      if (type === 'model') url = await generateEyewearImage(imageBase64, '1K', modelConfig);
+      else url = await generatePosterImage(imageBase64, posterConfig, '1K', modelConfig.aspectRatio);
+      
+      setGeneratedImage(url);
+      setMode(AppMode.RESULT);
+      setHistory(prev => [{ id: Math.random().toString(36).substr(2, 4).toUpperCase(), url, type, timestamp: Date.now() }, ...prev]);
+    } catch (err: any) {
+      setError("RENDER_ERROR: 请确保上传的产品底图清晰可见。");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   const renderModelConfig = () => {
-    const categoryMap: Record<EyewearCategory, string> = { 'Fashion Optical': '光学镜', 'Sunglasses': '太阳镜', 'Sports': '运动镜', 'Vintage': '复古镜', 'Luxury': '奢侈品' };
-    const clothingMap: Record<ClothingStyle, string> = { 'Business': '商务', 'Casual': '休闲', 'Luxury': '奢华', 'Resort': '度假', 'Street': '街头', 'Sporty': '运动', 'Vintage': '复古', 'Minimalist': '极简' };
-    const poseMap: Record<PoseStyle, string> = { 'Professional': '专业', 'Relaxed': '轻松', 'Avant-Garde': '前卫', 'Dynamic': '动态', 'Elegant': '优雅' };
-    const actionMap: Record<HandAction, string> = { 'None': '无动作', 'Adjusting Glasses': '调整镜架', 'Touching Hair': '撩拨头发', 'Thinking': '托腮思考', 'Touching Frame': '轻触镜框', 'Crossing Arms': '双手抱胸' };
-    const ethnicityMap: Record<EthnicityType, string> = { 'East Asian': '东亚', 'Southeast Asian': '东南亚', 'South Asian': '南亚', 'Caucasian': '欧裔', 'African': '非裔', 'Hispanic/Latino': '拉丁裔', 'Mediterranean': '地中海', 'Scandinavian': '北欧', 'Middle Eastern': '中东' };
-    const skinMap: Record<string, string> = { 'High-Fidelity Realism': '极致真实', 'Natural Commercial': '商业精修', 'Soft Glow': '柔和通透' };
+    const ethnicityMap: Record<EthnicityType, string> = { 
+      'East Asian': '东亚', 'Southeast Asian': '东南亚', 'South Asian': '南亚', 
+      'Caucasian': '欧裔', 'Mediterranean': '地中海', 'Scandinavian': '北欧', 
+      'African': '非裔', 'Hispanic/Latino': '拉丁裔', 'Middle Eastern': '中东' 
+    };
+    const purposeMap: Record<CommercialStyle, string> = {
+      'E-commerce Main': '电商主图', 'Brand Campaign': '品牌大片', 'Social Media': '社媒推广', 'Lookbook': '画册样片', 'Advertising Poster': '广告海报'
+    };
+    const vibeMap: Record<ModelVibe, string> = {
+      'Calm & Intellectual': '理性知性', 'Natural & Friendly': '亲和自然', 'High-Fashion Edge': '高端冷峻', 'Athletic Energy': '动感活力', 'Professional Executive': '专业职场'
+    };
+    const framingMap: Record<FramingType, string> = {
+      'Close-up': '面部特写 (Close-up)',     // 强调材质细节
+      'Bust Shot': '胸像半身 (Bust Shot)',   // 标准肖像
+      'Upper Body': '腰部半身 (Waist-up)',   // 展示服装搭配
+      'Full Body': '全身氛围 (Full Body)'     // 强调场景和整体 Look
+    };
+    const ageMap = { 'Child': '儿童', 'Teenager': '青少年', 'Youth': '青年', 'Adult': '成熟', 'Mature': '资深' };
 
     return (
-      <div className="space-y-12 animate-fade-in pb-32 max-w-full lg:max-w-2xl px-1">
+      <div className="space-y-12 animate-fade-in pb-32 max-w-2xl mx-auto">
         <div className="space-y-3">
-           <button onClick={() => setMode(AppMode.DASHBOARD)} className="text-[10px] text-zinc-600 uppercase tracking-widest hover:text-white transition-colors">← 返回</button>
-           <h2 className="text-4xl lg:text-5xl font-black italic font-serif text-white">拍摄中心</h2>
-           <p className="text-zinc-600 text-[9px] font-black uppercase tracking-[0.2em]">Product Categorization & Visual Directing</p>
+          <button onClick={() => setMode(AppMode.DASHBOARD)} className="text-[10px] text-zinc-600 uppercase tracking-widest hover:text-white transition-colors">← 返回</button>
+          <h2 className="text-4xl font-black italic font-serif text-white">商业视觉配置</h2>
+          <p className="text-zinc-600 text-[9px] font-black uppercase tracking-[0.2em]">Structural Intent Engineering</p>
         </div>
 
         <div className="space-y-14">
-           {/* 第一步：产品分类 */}
-           <SelectorGroup title="1. 产品分类 (定位核心)" icon={<IconCreative />} color="text-sky-400">
-              <Selector label="眼镜类型" options={Object.keys(categoryMap)} current={modelConfig.category} onChange={(v: any) => setModelConfig(p => ({...p, category: v}))} labelMap={categoryMap} />
-           </SelectorGroup>
+          <SelectorGroup title="视觉策略 (Visual Strategy)" icon={<IconCreative />} color="text-yellow-400">
+             <Selector label="视觉用途" options={Object.keys(purposeMap)} current={modelConfig.visualPurpose} onChange={(v: any) => setModelConfig(p => ({...p, visualPurpose: v}))} labelMap={purposeMap} />
+             <Selector label="模特状态" options={Object.keys(vibeMap)} current={modelConfig.modelVibe} onChange={(v: any) => setModelConfig(p => ({...p, modelVibe: v}))} labelMap={vibeMap} />
+          </SelectorGroup>
 
-           {/* 第二步：拍摄环境 */}
-           <div className="space-y-10 p-6 lg:p-8 bg-zinc-900/10 rounded-[2.5rem] border border-white/[0.03]">
-              <div className="flex items-center gap-4">
-                <div className="p-2.5 rounded-xl text-amber-400 bg-amber-400/10 flex items-center justify-center border border-amber-400/10"><IconGallery /></div>
-                <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-white/80">2. 拍摄环境 (视觉语境)</h3>
-              </div>
-              <div className="grid grid-cols-1 gap-4">
-                {EYEWEAR_SCENES.filter(s => s.category.includes(modelConfig.category) || modelConfig.category === 'Luxury').map(scene => {
-                  const isSelected = modelConfig.scene === scene.promptFragment;
-                  return (
-                    <div key={scene.id} onClick={() => setModelConfig({...modelConfig, scene: scene.promptFragment, lighting: scene.recommendedLighting, framing: scene.recommendedFraming})} className={`p-5 rounded-2xl border cursor-pointer transition-all ${isSelected ? 'bg-white text-black border-white' : 'bg-zinc-950/40 border-white/5 hover:border-white/10'}`}>
-                      <div className="flex justify-between items-center">
-                        <span className={`text-[11px] font-black uppercase tracking-wide ${isSelected ? 'text-black' : 'text-zinc-200'}`}>{scene.displayName}</span>
-                        {isSelected && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
-                      </div>
-                      <p className={`text-[9px] mt-1 ${isSelected ? 'text-black/60' : 'text-zinc-500'}`}>{scene.uiDescription}</p>
-                    </div>
-                  );
-                })}
-              </div>
-           </div>
+          <SelectorGroup title="角色特征 (Model Profile)" icon={<IconModel />} color="text-white">
+            <Selector label="族裔" options={Object.keys(ethnicityMap)} current={modelConfig.ethnicity} onChange={(v: any) => setModelConfig(p => ({...p, ethnicity: v}))} labelMap={ethnicityMap} />
+            <div className="grid grid-cols-2 gap-8">
+              <Selector label="年龄段" options={Object.keys(ageMap)} current={modelConfig.age} onChange={(v: any) => setModelConfig(p => ({...p, age: v}))} labelMap={ageMap} />
+              <Selector label="模特性别" options={['Female', 'Male', 'Non-binary']} current={modelConfig.gender} onChange={(v: any) => setModelConfig(p => ({...p, gender: v}))} labelMap={{'Female':'女性','Male':'男性','Non-binary':'中性'}} />
+            </div>
+          </SelectorGroup>
 
-           {/* 第三步：造型配置 */}
-           <SelectorGroup title="3. 造型与姿态 (品牌细节)" icon={<IconModel />} color="text-purple-400">
-              <Selector label="服装风格" options={Object.keys(clothingMap)} current={modelConfig.clothingStyle} onChange={(v: any) => setModelConfig(p => ({...p, clothingStyle: v}))} labelMap={clothingMap} />
-              <Selector label="姿态风格" options={Object.keys(poseMap)} current={modelConfig.poseStyle} onChange={(v: any) => setModelConfig(p => ({...p, poseStyle: v}))} labelMap={poseMap} />
-              <Selector label="手部动作" options={Object.keys(actionMap)} current={modelConfig.handAction} onChange={(v: any) => setModelConfig(p => ({...p, handAction: v}))} labelMap={actionMap} />
-           </SelectorGroup>
+          <SelectorGroup title="构图与视角 (Composition & Perspective)" icon={<IconCamera />} color="text-blue-400">
+            <Selector 
+              label="景别选择 (Framing)" 
+              options={Object.keys(framingMap)} 
+              current={modelConfig.framing} 
+              onChange={(v: any) => setModelConfig(p => ({...p, framing: v}))} 
+              labelMap={framingMap} 
+            />
+            { (modelConfig.framing === 'Full Body' || modelConfig.framing === 'Upper Body') && (
+              <p className="text-[9px] text-zinc-500 uppercase tracking-[0.2em] font-black px-1 animate-pulse">
+                注：全身模式下将自动匹配时尚穿搭以增强氛围感。
+              </p>
+            )}
+          </SelectorGroup>
 
-           {/* 第四步：人物特征 */}
-           <SelectorGroup title="4. 模特参数 (目标客群)" icon={<IconModel />} color="text-white">
-              <Selector label="族裔" options={Object.keys(ethnicityMap)} current={modelConfig.ethnicity} onChange={(v: any) => setModelConfig(p => ({...p, ethnicity: v}))} labelMap={ethnicityMap} />
-              <Selector label="肤质" options={Object.keys(skinMap)} current={modelConfig.skinTexture} onChange={(v: any) => setModelConfig(p => ({...p, skinTexture: v}))} labelMap={skinMap} />
-           </SelectorGroup>
+          <div className="p-10 bg-zinc-900/10 rounded-[3rem] border border-white/[0.03] space-y-8">
+            <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-white/80">拍摄环境 (Environment)</h3>
+            <div className="flex flex-wrap gap-3">
+              {EYEWEAR_SCENES.map(s => (
+                <button 
+                  key={s.name} 
+                  onClick={() => setModelConfig(p => ({...p, scene: s.prompt}))}
+                  className={`px-5 py-4 rounded-2xl text-[10px] font-bold border transition-all duration-300 ${modelConfig.scene === s.prompt ? 'bg-white text-black border-white shadow-[0_15px_30px_rgba(255,255,255,0.1)] scale-105' : 'bg-zinc-950/40 text-zinc-500 border-white/5 hover:border-white/20'}`}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          </div>
 
-           {/* 第五步：摄影微调 */}
-           <div className="space-y-10 p-6 lg:p-8 bg-zinc-900/10 rounded-[2.5rem] border border-white/[0.03]">
-              <div className="flex items-center gap-4">
-                <div className="p-2.5 rounded-xl text-emerald-400 bg-emerald-400/10 flex items-center justify-center border border-emerald-400/10"><IconCamera /></div>
-                <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-white/80">5. 摄影参数 (专业输出)</h3>
-              </div>
-              <div className="space-y-8">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {(['Close-up', 'Bust Shot', 'Upper Body', 'Full Body'] as FramingType[]).map(f => (
-                    <button key={f} onClick={() => setModelConfig({...modelConfig, framing: f})} className={`p-4 rounded-2xl border flex flex-col items-center gap-3 transition-all ${modelConfig.framing === f ? 'bg-white text-black border-white shadow-xl' : 'bg-zinc-950/40 text-zinc-500 border-white/5'}`}>
-                      {FRAMING_ICONS[f]}
-                      <span className="text-[9px] font-black uppercase">{f === 'Close-up' ? '特写' : f === 'Bust Shot' ? '胸像' : f === 'Upper Body' ? '上半身' : '全身'}</span>
-                    </button>
-                  ))}
-                </div>
-                <Selector label="导出比例" options={Object.keys(RATIO_MAP)} current={modelConfig.aspectRatio} onChange={(v: any) => setModelConfig(p => ({...p, aspectRatio: v}))} labelMap={RATIO_MAP} />
-              </div>
-           </div>
-
-           <Button onClick={() => checkKeyAndRun(async () => generateEyewearImage(imageBase64, imageSize, modelConfig), "商业摄影")} className="w-full h-20 rounded-[2rem] bg-white text-black font-black shadow-2xl" isLoading={isGenerating}>开启商业摄影渲染</Button>
+          <Button onClick={() => handleRun('model')} className="w-full h-20 rounded-3xl bg-white text-black font-black text-[12px] shadow-[0_30px_60px_rgba(255,255,255,0.1)] active:scale-95" isLoading={isGenerating}>
+            生成高端模特大片
+          </Button>
         </div>
       </div>
     );
@@ -326,123 +212,103 @@ const App: React.FC = () => {
           <div className="w-9 h-9 bg-white text-black rounded-xl font-serif font-black flex items-center justify-center text-2xl">L</div>
           <span className="font-black text-2xl font-serif italic text-white">Lyra</span>
         </div>
-        <div className="flex-1 px-8 py-4 space-y-2">
+        <nav className="flex-1 px-8 py-4 space-y-2">
           <NavItem active={activeTab === NavTab.CREATE} onClick={() => { setActiveTab(NavTab.CREATE); setMode(AppMode.DASHBOARD); }} icon={<IconCreative />} label="创作中心" />
           <NavItem active={activeTab === NavTab.GALLERY} onClick={() => setActiveTab(NavTab.GALLERY)} icon={<IconGallery />} label="作品集" />
-        </div>
+        </nav>
       </aside>
 
-      <main className="flex-1 flex flex-col min-h-screen bg-black">
-        <div className="container mx-auto px-6 py-12 lg:px-20 lg:py-20 max-w-7xl">
-          {activeTab === NavTab.CREATE && (
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-16 items-start">
-              <div className="xl:col-span-7 space-y-8 lg:sticky lg:top-12">
-                <div className="aspect-[3/4] rounded-[3rem] lg:rounded-[4rem] overflow-hidden border border-white/5 bg-[#080808] flex items-center justify-center relative shadow-2xl">
-                  {!imageBase64 ? (
-                    <div className="p-12 text-center space-y-12">
-                       <h1 className="text-5xl lg:text-6xl font-black font-serif italic text-white">眼镜摄影工坊</h1>
-                       <div className="flex flex-col gap-4 max-w-xs mx-auto">
-                          <Button variant="secondary" onClick={() => setIsCameraOpen(true)} className="rounded-2xl h-16"><IconCamera /> <span className="ml-3">开启专业相机</span></Button>
-                          <Button onClick={() => fileInputRef.current?.click()} className="rounded-2xl h-16"><IconUpload /> <span className="ml-3">上传产品底图</span></Button>
-                          <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
-                       </div>
-                    </div>
-                  ) : (
-                    <>
-                      <img src={generatedImage || previewUrl!} className={`max-w-full max-h-full object-contain ${isGenerating ? 'opacity-30 blur-sm' : ''}`} />
-                      {isGenerating && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-8 bg-black/40 backdrop-blur-md px-8 text-center">
-                           <div className="w-12 h-12 border-t-2 border-white rounded-full animate-spin"></div>
-                           <p className="text-[10px] text-white uppercase tracking-widest font-black animate-pulse leading-loose">{LOADING_MESSAGES[loadingStep]}</p>
-                        </div>
-                      )}
-                      {!isGenerating && (
-                        <button onClick={() => { setPreviewUrl(null); setImageBase64(''); setGeneratedImage(null); setMode(AppMode.DASHBOARD); }} className="absolute top-8 right-8 w-12 h-12 rounded-full bg-black/50 backdrop-blur border border-white/10 flex items-center justify-center text-white/50 hover:text-white transition-all"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-
-              <div className="xl:col-span-5">
-                {mode === AppMode.DASHBOARD && (
-                  <div className="space-y-10 animate-fade-in">
-                    <h2 className="text-4xl lg:text-5xl font-black italic font-serif text-white">选择创作流</h2>
-                    <div className="grid gap-5">
-                       <FeatureCard title="模特试戴" description="行业级人像渲染，深度定制产品定位、服装搭配与姿态" icon={<IconModel />} onClick={() => setMode(imageBase64 ? AppMode.MODEL_CONFIG : AppMode.DASHBOARD)} />
-                       <FeatureCard title="海报工坊" description="物理级材质渲染，生成品牌视觉大片" icon={<IconPoster />} onClick={() => setMode(imageBase64 ? AppMode.POSTER_GENERATION : AppMode.DASHBOARD)} />
-                    </div>
-                  </div>
-                )}
-                {mode === AppMode.MODEL_CONFIG && imageBase64 && renderModelConfig()}
-                {mode === AppMode.POSTER_GENERATION && imageBase64 && (
-                   <div className="space-y-10 animate-fade-in pb-32">
-                     <button onClick={() => setMode(AppMode.DASHBOARD)} className="text-[10px] text-zinc-600 uppercase tracking-widest hover:text-white">← 返回</button>
-                     <h2 className="text-4xl lg:text-5xl font-black italic font-serif text-white">海报工坊</h2>
-                     <div className="space-y-8">
-                       <div className="bg-zinc-900/20 p-8 rounded-[2rem] border border-white/5 space-y-4">
-                         <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">品牌标题</label>
-                         <input type="text" value={posterConfig.title} onChange={(e) => setPosterConfig({...posterConfig, title: e.target.value})} className="w-full bg-zinc-950 border border-white/5 rounded-2xl px-6 py-5 text-white font-serif italic text-2xl focus:border-white/20 outline-none" />
-                       </div>
-                       <Button onClick={() => checkKeyAndRun(async () => generatePosterImage(imageBase64, posterConfig, imageSize, modelConfig.aspectRatio), "商业海报")} className="w-full h-20 rounded-[2rem] bg-white text-black font-black shadow-2xl" isLoading={isGenerating}>导出海报资产</Button>
+      <main className="flex-1 flex flex-col min-h-screen">
+        <div className="container mx-auto px-6 py-12 lg:px-20 lg:py-20">
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-16">
+            <div className="xl:col-span-7">
+              <div className="aspect-[3/4] rounded-[3.5rem] overflow-hidden border border-white/5 bg-[#080808] flex items-center justify-center relative shadow-2xl">
+                {!imageBase64 ? (
+                  <div className="p-12 text-center space-y-12 animate-fade-in">
+                     <h1 className="text-6xl font-black font-serif italic text-white leading-tight">眼镜摄影工坊</h1>
+                     <div className="flex flex-col gap-4 max-w-xs mx-auto">
+                        <Button onClick={() => fileInputRef.current?.click()} className="rounded-3xl h-16"><IconUpload /> <span className="ml-3">上传眼镜资产</span></Button>
+                        <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
                      </div>
-                   </div>
-                )}
-                {mode === AppMode.RESULT && generatedImage && (
-                  <div className="space-y-10 animate-fade-in">
-                    <h2 className="text-4xl font-serif italic text-white">资产已就绪</h2>
-                    <div className="space-y-4">
-                      <Button onClick={() => { const link = document.createElement('a'); link.href = generatedImage!; link.download = `eyewear-${Date.now()}.png`; link.click(); }} className="w-full h-20 rounded-[2rem]">保存 8K 高清原图</Button>
-                      <Button variant="outline" onClick={() => setMode(AppMode.DASHBOARD)} className="w-full h-20 rounded-[2rem]">开启新创作</Button>
-                    </div>
                   </div>
+                ) : (
+                  <>
+                    <img src={generatedImage || previewUrl!} className={`max-w-full max-h-full object-contain ${isGenerating ? 'opacity-30 blur-md grayscale transition-all duration-1000' : 'transition-all duration-700'}`} />
+                    {isGenerating && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-10 bg-black/40 backdrop-blur-xl px-12 text-center">
+                         <div className="relative">
+                            <div className="w-20 h-20 border-2 border-white/10 rounded-full"></div>
+                            <div className="absolute inset-0 w-20 h-20 border-t-2 border-white rounded-full animate-spin"></div>
+                         </div>
+                         <div className="space-y-4">
+                            <p className="text-[11px] text-white uppercase tracking-[0.3em] font-black animate-pulse">{LOADING_MESSAGES[loadingStep]}</p>
+                            <div className="w-48 h-[1px] bg-white/10 mx-auto overflow-hidden">
+                               <div className="w-full h-full bg-white origin-left animate-[loadingBar_3s_infinite]"></div>
+                            </div>
+                         </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
-          )}
+
+            <div className="xl:col-span-5">
+              {mode === AppMode.DASHBOARD && (
+                <div className="space-y-10">
+                  <h2 className="text-5xl font-black italic font-serif text-white">模式决策</h2>
+                  <div className="grid gap-6">
+                     <FeatureCard title="商业模特试戴" description="系统自动识别镜片类型，支持从细节特写到全身 Lookbook 的全场景渲染。" icon={<IconModel />} onClick={() => setMode(AppMode.MODEL_CONFIG)} />
+                     <FeatureCard title="品牌海报工坊" description="基于材质交互与空间构图，一键生成高净值海报。" icon={<IconPoster />} onClick={() => setMode(AppMode.POSTER_GENERATION)} />
+                  </div>
+                </div>
+              )}
+              {mode === AppMode.MODEL_CONFIG && imageBase64 && renderModelConfig()}
+              {mode === AppMode.RESULT && generatedImage && (
+                <div className="space-y-10 animate-fade-in">
+                  <div className="space-y-2">
+                    <h2 className="text-5xl font-serif italic text-white">渲染完成</h2>
+                    <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Success: Asset Ready for Commercial Use</p>
+                  </div>
+                  <div className="space-y-4">
+                    <Button onClick={() => {
+                      const link = document.createElement('a');
+                      link.href = generatedImage!;
+                      link.download = `eyewear-${Date.now()}.png`;
+                      link.click();
+                    }} className="w-full h-20 rounded-3xl bg-white text-black font-black">导出 8K 商业原图</Button>
+                    <Button variant="outline" onClick={() => setMode(AppMode.DASHBOARD)} className="w-full h-20 rounded-3xl">重新配置</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </main>
-
-      {isCameraOpen && (
-        <div className="fixed inset-0 z-[1000] bg-black flex flex-col items-center justify-center">
-           <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
-           <div className="absolute bottom-12 left-0 right-0 flex justify-center items-center gap-10">
-              <button onClick={() => setFacingMode(f => f === 'user' ? 'environment' : 'user')} className="w-16 h-16 rounded-full ios-glass text-white flex items-center justify-center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8 3.582 8 8 8c2.187 0 4.168-.881 5.606-2.304l1.894 1.894V10h-7.59l1.894 1.894C12.373 13.313 10.312 14 8 14c-3.314 0-6-2.686-6-6s2.686-6 6-6 6 2.686 6 6h2z"/></svg></button>
-              <button onClick={capturePhoto} className="w-24 h-24 rounded-full bg-white border-[6px] border-white/20 active:scale-90 shadow-2xl" />
-              <button onClick={stopCamera} className="w-16 h-16 rounded-full ios-glass text-red-500 flex items-center justify-center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
-           </div>
-           <canvas ref={canvasRef} className="hidden" />
-        </div>
-      )}
-      {error && <div className="fixed bottom-10 left-1/2 -translate-x-1/2 ios-glass px-10 py-6 rounded-full text-red-400 text-xs font-black z-[500]">{error}</div>}
+      
+      {error && <div className="fixed bottom-10 left-1/2 -translate-x-1/2 ios-glass px-10 py-6 rounded-[2.5rem] text-red-400 text-[10px] font-black z-[500] uppercase tracking-widest border-red-900/20">{error}</div>}
+      <style>{`
+        @keyframes loadingBar {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+      `}</style>
     </div>
   );
-
-  async function checkKeyAndRun(action: () => Promise<string>, type: string) {
-    setIsGenerating(true); setError(null);
-    try {
-      await ensureApiKey();
-      const url = await action();
-      setGeneratedImage(url);
-      setMode(AppMode.RESULT);
-      setHistory(prev => [{ id: Math.random().toString(36).substr(2, 4).toUpperCase(), url, type, timestamp: Date.now() }, ...prev]);
-    } catch (err: any) {
-      setError("渲染引擎繁忙，请稍后重试");
-    } finally { setIsGenerating(false); }
-  }
 };
 
 const NavItem = ({ active, onClick, icon, label }: any) => (
-  <div onClick={onClick} className={`flex items-center gap-5 px-6 py-5 rounded-2xl cursor-pointer transition-all ${active ? 'bg-white text-black font-bold' : 'text-zinc-600 hover:text-white'}`}>
+  <div onClick={onClick} className={`flex items-center gap-5 px-6 py-5 rounded-2xl cursor-pointer transition-all ${active ? 'bg-white text-black font-bold scale-[1.02] shadow-xl' : 'text-zinc-600 hover:text-white hover:bg-white/5'}`}>
     {icon} <span className="text-[10px] tracking-[0.2em] uppercase font-black">{label}</span>
   </div>
 );
 
 const SelectorGroup = ({ title, icon, color, children }: any) => (
-  <div className="space-y-10 p-6 lg:p-8 bg-zinc-900/10 rounded-[2.5rem] border border-white/[0.03]">
+  <div className="space-y-10 p-10 bg-zinc-900/10 rounded-[3rem] border border-white/[0.03] shadow-inner">
     <div className="flex items-center gap-4">
-      <div className={`p-2.5 rounded-xl ${color} bg-opacity-10 border border-current/10`}>{icon}</div>
-      <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-white/80">{title}</h3>
+      <div className={`p-3 rounded-2xl ${color} bg-opacity-10 flex items-center justify-center border border-current/10 shadow-lg`}>{icon}</div>
+      <h3 className="text-[12px] font-black uppercase tracking-[0.2em] text-white/90">{title}</h3>
+      <div className="flex-1 h-[1px] bg-gradient-to-r from-zinc-800 to-transparent"></div>
     </div>
     <div className="space-y-12">{children}</div>
   </div>
@@ -450,10 +316,14 @@ const SelectorGroup = ({ title, icon, color, children }: any) => (
 
 const Selector = ({ label, options, current, onChange, labelMap }: any) => (
   <div className="flex flex-col gap-5">
-    <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">{label}</label>
-    <div className="flex flex-wrap gap-2.5">
+    <label className="text-[10px] text-zinc-600 uppercase tracking-widest font-black">{label}</label>
+    <div className="flex flex-wrap gap-3">
       {options.map((opt: string) => (
-        <button key={opt} onClick={() => onChange(opt)} className={`px-5 py-4 rounded-2xl text-[10px] font-black border transition-all ${current === opt ? 'bg-white text-black border-white' : 'bg-zinc-950/40 text-zinc-500 border-white/5 hover:border-white/20'}`}>
+        <button
+          key={opt}
+          onClick={() => onChange(opt)}
+          className={`px-5 py-4 rounded-2xl text-[10px] font-bold border transition-all duration-300 ${current === opt ? 'bg-white text-black border-white shadow-lg scale-105' : 'bg-zinc-950/40 text-zinc-500 border-white/5 hover:border-white/20 hover:text-zinc-200'}`}
+        >
           {labelMap ? (labelMap[opt] || opt) : opt}
         </button>
       ))}

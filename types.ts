@@ -19,17 +19,10 @@ export type AspectRatio = '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
 export type CameraFacingMode = 'user' | 'environment';
 export type FramingType = 'Close-up' | 'Bust Shot' | 'Upper Body' | 'Full Body';
 
-// 眼镜产品类型
-export type EyewearCategory = 'Fashion Optical' | 'Sunglasses' | 'Sports' | 'Vintage' | 'Luxury';
+export type EyewearType = 'Optical' | 'Sunglasses' | 'Sports' | 'Auto-detect';
 
-// 服装预设
-export type ClothingStyle = 'Business' | 'Casual' | 'Luxury' | 'Resort' | 'Street' | 'Sporty' | 'Vintage' | 'Minimalist';
-
-// 姿态风格
-export type PoseStyle = 'Professional' | 'Relaxed' | 'Avant-Garde' | 'Dynamic' | 'Elegant';
-
-// 手部动作
-export type HandAction = 'None' | 'Adjusting Glasses' | 'Touching Hair' | 'Thinking' | 'Touching Frame' | 'Crossing Arms';
+export type CommercialStyle = 'E-commerce Main' | 'Brand Campaign' | 'Social Media' | 'Lookbook' | 'Advertising Poster';
+export type ModelVibe = 'Calm & Intellectual' | 'Natural & Friendly' | 'High-Fashion Edge' | 'Athletic Energy' | 'Professional Executive';
 
 export type CameraType = 'Hasselblad H6D' | 'Sony A7R V' | 'Fujifilm GFX 100II' | 'Leica M11';
 export type LensType = '35mm f/1.4' | '50mm f/1.2' | '85mm f/1.4' | '100mm f/2.8 Macro' | '135mm f/1.8';
@@ -69,12 +62,12 @@ export interface PosterConfig {
 }
 
 export interface ModelConfig {
-  category: EyewearCategory;
-  clothingStyle: ClothingStyle;
-  poseStyle: PoseStyle;
-  handAction: HandAction;
+  eyewearType: EyewearType; 
+  visualPurpose: CommercialStyle;
+  modelVibe: ModelVibe;
   ethnicity: EthnicityType;
   gender: 'Female' | 'Male' | 'Non-binary';
+  age: 'Child' | 'Teenager' | 'Youth' | 'Adult' | 'Mature';
   scene: string;
   framing: FramingType;
   camera: CameraType;
@@ -83,11 +76,6 @@ export interface ModelConfig {
   lighting: LightingType;
   mood: MoodType;
   aspectRatio: AspectRatio;
-}
-
-export interface User {
-  phoneNumber: string;
-  name: string;
 }
 
 declare global {
