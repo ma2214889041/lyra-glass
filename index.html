@@ -1,0 +1,71 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover" />
+    <title>Lyra 眼镜摄影工坊</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,600&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --accent: #ffffff;
+        --zinc-950: #09090b;
+        --zinc-900: #18181b;
+      }
+      body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        background-color: #000;
+        color: #f4f4f5;
+        overscroll-behavior-y: none;
+        -webkit-tap-highlight-color: transparent;
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      .font-serif {
+        font-family: 'Cormorant Garamond', serif;
+      }
+      .animate-fade-in {
+        animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(15px); filter: blur(8px); }
+        to { opacity: 1; transform: translateY(0); filter: blur(0); }
+      }
+      .ios-glass {
+        background: rgba(20, 20, 20, 0.7);
+        backdrop-filter: saturate(180%) blur(25px);
+        -webkit-backdrop-filter: saturate(180%) blur(25px);
+        border: 0.5px solid rgba(255, 255, 255, 0.1);
+      }
+      .ios-card {
+        background: rgba(28, 28, 30, 0.5);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 0.5px solid rgba(255, 255, 255, 0.08);
+        border-radius: 28px;
+      }
+      .ios-active-pill {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 14px;
+      }
+      ::-webkit-scrollbar { width: 0; }
+      .safe-pb { padding-bottom: env(safe-area-inset-bottom); }
+      .safe-pt { padding-top: env(safe-area-inset-top); }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.33.0"
+  }
+}
+</script>
+</head>
+  <body class="antialiased selection:bg-white selection:text-black bg-black">
+    <div id="root"></div>
+  </body>
+</html>
