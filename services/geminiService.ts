@@ -18,10 +18,57 @@ export const ensureApiKey = async (): Promise<void> => {
  */
 const TECHNICAL_MAPPINGS = {
   skin: {
-    'High-Fidelity Realism': 'Frequency separation retouching: preserve 40% original skin texture, micro-detail retained, zero blemish removal.',
-    'Natural Commercial': 'Commercial beauty finish: 85% texture smoothing, maintain natural pore structure in non-highlight areas, healthy luminosity enhancement.',
-    'Soft Glow': 'Ethereal skin treatment: 95% surface smoothing, diffused highlight zones +0.5EV, complete blemish elimination with maintained facial structure.'
+    'High-Fidelity Realism': 'The skin shows authentic texture with visible pores and natural surface variation, maintaining healthy clarity without artificial smoothing. Subtle imperfections are preserved to convey realism.',
+    'Natural Commercial': 'The complexion is polished to commercial beauty standards with smoothed texture while retaining natural dimensionality. Skin appears flawless yet believable, with healthy luminosity.',
+    'Soft Glow': 'The skin has an ethereal, luminous quality with diffused highlights creating a gentle radiance. Surface texture is minimized while maintaining facial structure and natural contours.'
   }
+};
+
+// 构建情境化姿态描述
+const buildFramingNarrative = (framing: FramingType, age: string, gender: string): string => {
+  const ageModifiers = {
+    'Child': 'playful and natural',
+    'Teenager': 'energetic yet composed',
+    'Youth': 'vibrant and confident',
+    'Adult': 'poised and self-assured',
+    'Mature': 'dignified and relaxed'
+  };
+
+  const genderNuances = {
+    'Female': 'with graceful lines and elegant posture',
+    'Male': 'with strong, stable presence and structured positioning',
+    'Non-binary': 'with balanced, authentic self-presentation'
+  };
+
+  const framingBase = {
+    'Close-up': `A close-up portrait framed from upper chest to crown, placing primary emphasis on facial features and the eyewear. The subject's head position creates optimal eyewear visibility through a subtle angle. The expression is ${ageModifiers[age as keyof typeof ageModifiers]} ${genderNuances[gender as keyof typeof genderNuances]}, with direct eye contact that engages the viewer naturally.`,
+    'Bust Shot': `A bust shot composition extending from mid-chest upward, providing professional portrait context. The subject adopts a relaxed posture ${genderNuances[gender as keyof typeof genderNuances]}, with shoulders positioned at a natural angle. The overall bearing is ${ageModifiers[age as keyof typeof ageModifiers]}.`,
+    'Upper Body': `An upper body portrait from waist to head. The stance is ${ageModifiers[age as keyof typeof ageModifiers]} ${genderNuances[gender as keyof typeof genderNuances]}, creating visual structure through natural body positioning.`,
+    'Full Body': `A full-length portrait showing the complete figure. The subject's full-body stance embodies ${ageModifiers[age as keyof typeof ageModifiers]} presence ${genderNuances[gender as keyof typeof genderNuances]}. Despite the wider framing, the eyewear remains clearly visible and properly scaled.`
+  };
+
+  return framingBase[framing];
+};
+
+// 构建场景与光线的综合叙事
+const buildLightingNarrative = (lighting: LightingType, scene: string): string => {
+  const isOutdoorScene = scene.toLowerCase().includes('terrace') || 
+                         scene.toLowerCase().includes('beach') || 
+                         scene.toLowerCase().includes('forest') ||
+                         scene.toLowerCase().includes('outdoor');
+
+  const lightingNarratives = {
+    'Butterfly (Paramount)': isOutdoorScene 
+      ? 'Natural overhead sunlight creates soft, even illumination with gentle shadows beneath the nose. flatering beauty quality.'
+      : 'Professional beauty lighting with diffused illumination from above and in front. Skin tone appears luminous.',
+    'Rembrandt': 'Classic studio lighting at forty-five degrees creates chiaroscuro effects with a triangular highlight on the shadowed cheek.',
+    'Rim Light': 'Dramatic backlighting creates a luminous outline separating the subject from the background.',
+    'Softbox Diffused': 'Large, diffused light sources provide wraparound illumination that is exceptionally even and flattering.',
+    'Neon Noir': 'Atmospheric lighting featuring carefully balanced colored accents creates contemporary editorial mood.',
+    'Golden Hour': 'Warm, low-angle natural sunlight around 3200K creates long soft shadows and gentle modeling. Lenses show realistic sky reflections.'
+  };
+
+  return lightingNarratives[lighting];
 };
 
 export const generateEyewearImage = async (
@@ -32,28 +79,9 @@ export const generateEyewearImage = async (
   const ai = getAI();
   const model = 'gemini-3-pro-image-preview';
 
-  const framingNarrative = {
-    'Close-up': 'A close-up portrait focusing on the face and upper shoulders. The subject looks directly at the camera with a subtle, confident expression. Frame the shot to clearly showcase the eyewear while maintaining natural eye contact.',
-    'Bust Shot': 'A bust shot capturing from mid-chest to the top of the head. The subject adopts a relaxed, slightly turned pose with one shoulder forward. Hands are positioned naturally, either resting or gently touching the frames.',
-    'Upper Body': 'An upper body shot from waist level upward. The subject stands in a three-quarter pose, with arms positioned to create visual interest without obscuring the eyewear. Background elements provide environmental context.',
-    'Full Body': 'A full-length portrait showing the complete figure in an architectural setting. The subject strikes a confident editorial pose, with the eyewear remaining clearly visible despite the wider framing. Environmental elements frame the composition.'
-  }[modelConfig.framing];
-
-  const lightingNarrative = {
-    'Butterfly (Paramount)': 'Studio lighting setup with a large softbox positioned directly above and in front of the subject, creating a distinctive butterfly-shaped shadow beneath the nose. Fill lights at camera level soften shadows under the cheekbones. The eyewear frames catch crisp highlights along their top edge.',
-    'Rembrandt': 'Classic Rembrandt lighting with the key light at 45 degrees to the side and slightly elevated, casting a characteristic triangular highlight on the shadowed cheek. Minimal fill light preserves dramatic contrast. Eyewear lenses show graduated reflections corresponding to the light position.',
-    'Rim Light': 'Dramatic backlighting positioned behind and above the subject, creating a luminous outline along the hair and shoulders. The eyewear frames are edged with brilliant highlights while the face receives subtle frontal fill, separating the subject from a darker background.',
-    'Softbox Diffused': 'Professional studio setup with large octagonal softboxes providing wraparound illumination. Light is even and flattering across the face, with soft gradual shadows. Eyewear reflections are controlled and subtle, showing diffused light sources rather than harsh specular points.',
-    'Neon Noir': 'Cinematic atmospheric lighting with colored accent lights (cyan and warm amber tones) creating a contemporary editorial mood. Realistic light falloff and subtle environmental haze add depth. Eyewear lenses pick up the colored light sources with natural intensity.',
-    'Golden Hour': 'Natural outdoor lighting during the golden hour, with warm sunlight at approximately 15 degrees above the horizon. Light has a honey-gold quality with long, soft shadows. The eyewear frames are rimmed with golden highlights, and lenses show realistic sky reflections with subtle lens flares.'
-  }[modelConfig.lighting];
-
-  // 场景描述逻辑优化：判断是否是预设的长文本描述
-  const finalSceneDesc = modelConfig.scene.length > 50 
-    ? modelConfig.scene 
-    : `The setting features ${modelConfig.scene}. Render this environment with architectural photography standards - surfaces show realistic texture and color variation, glass elements exhibit accurate refraction.`;
-
-  const skinInstruction = TECHNICAL_MAPPINGS.skin[modelConfig.skinTexture];
+  const framingNarrative = buildFramingNarrative(modelConfig.framing, modelConfig.age, modelConfig.gender);
+  const lightingNarrative = buildLightingNarrative(modelConfig.lighting, modelConfig.scene);
+  const skinInstruction = TECHNICAL_MAPPINGS.skin[modelConfig.skinTexture as keyof typeof TECHNICAL_MAPPINGS.skin];
 
   const response = await ai.models.generateContent({
     model: model,
@@ -62,39 +90,30 @@ export const generateEyewearImage = async (
         { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
         { 
           text: `
-This is a premium commercial eyewear product photograph featuring a professional model. 
-CRITICAL REQUIREMENT: The eyewear from the reference image must be replicated with pixel-perfect accuracy. Preserve the exact frame geometry, temple design, bridge structure, and lens characteristics. Do not modify the eyewear style, material finish, or color in any way.
+Create a premium commercial eyewear product photograph.
+
+ABSOLUTE PRODUCT FIDELITY:
+Eyewear must be replicated with forensic, pixel-perfect accuracy. Every design element must match exactly. Metallic frames display sharp reflections; Acetate frames exhibit satin finish with subtle grain.
+Lens surfaces catch environmental lighting as natural reflections (20-30% area). Eyes remain clearly visible through lenses with subtle focal distortion.
 
 SUBJECT & COMPOSITION:
-${framingNarrative} 
-The model is a ${modelConfig.age} ${modelConfig.gender} of ${modelConfig.ethnicity} descent, exhibiting professional fashion model aesthetics with symmetrical facial features and a sophisticated appearance suitable for luxury brand imaging.
+${framingNarrative}
+Model: ${modelConfig.ethnicity} professional aesthetic, ${modelConfig.age} age, ${modelConfig.gender} gender.
 
-EYEWEAR PRESENTATION PRIORITIES:
-The eyewear sits naturally on the subject's nose bridge with realistic contact points and subtle pressure indication at the nose pads. Temple tips are positioned correctly behind the ears. 
-Frame material rendering: Metallic frames display sharp environmental reflections; Acetate frames exhibit a subtle satin finish with natural grain; Titanium frames show a characteristic brushed metal surface.
-
-Lens specifications: Maintain optical thickness visible at the lens edges. Render realistic refraction index effects - eyes should be clearly visible through lenses but with subtle focal distortion. Lens surfaces show 15-25% environmental reflection.
+ENVIRONMENTAL SETTING:
+${modelConfig.scene}
 
 LIGHTING & ATMOSPHERE:
 ${lightingNarrative}
 
-ENVIRONMENT & SETTING:
-${finalSceneDesc}
+SKIN & MAKEUP:
+${skinInstruction} Natural beauty standards.
 
-SKIN TREATMENT & MAKEUP:
-${skinInstruction} Complexion is clear and healthy with natural luminosity. Makeup is professionally applied.
+COLOR & MOOD:
+${modelConfig.mood} color grading. Absolute color accuracy for product.
 
-COLOR GRADING & MOOD:
-Apply ${modelConfig.mood} color characteristics using ACES color workflow.
-
-REALISM VALIDATION CHECKPOINTS:
-1. EYEPOCKET PHYSICS: Natural contact points on nose and ears.
-2. PROPORTIONAL SCALE: Dimensions correspond to facial scale.
-3. OPTICAL INTEGRATION: Lens reflections correspond to environment.
-4. MATERIAL COHERENCE: Consistent textures across lighting angles.
-
-OUTPUT SPECIFICATIONS: 8K resolution commercial photography quality.
-` 
+OUTPUT: 8K resolution commercial photography quality.
+`
         }
       ]
     },
@@ -114,9 +133,14 @@ OUTPUT SPECIFICATIONS: 8K resolution commercial photography quality.
   throw new Error("RENDER_ENGINE_UNAVAILABLE");
 };
 
+export interface SceneRecommendation {
+  id: string;
+  reason: string;
+}
+
 export const analyzeEyewearAndSuggestScene = async (
   imageBase64: string
-): Promise<string[]> => {
+): Promise<SceneRecommendation[]> => {
   const ai = getAI();
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
@@ -124,20 +148,18 @@ export const analyzeEyewearAndSuggestScene = async (
       parts: [
         { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
         { 
-          text: `Analyze this eyewear product and recommend 3 most suitable scene IDs from the following list based on frame style, material, and target demographic.
+          text: `Analyze this eyewear and recommend 3 scene IDs from the list below. 
+Provide a short Chinese reason for each recommendation (e.g. "金属细框设计，建议使用简约现代场景突出产品线条感").
 
-Options:
-- modern_office_window: Sleek, contemporary, corporate
-- executive_library: Classic, sophisticated, intellectual
-- minimalist_conference: Bold, architectural, geometric
-- architectural_corridor: Avant-garde, modernist, designer
-- glass_atrium: Lightweight, minimalist, clean
-- urban_industrial: Vintage-inspired, edgy, artistic
-- coastal_terrace: Sunglasses, casual-elegant, luxury
-- forest_morning: Natural, eco-friendly, organic
-- scandinavian_interior: Minimalist Nordic, serene, refined
+Scene IDs:
+- modern_office_window
+- executive_library
+- architectural_corridor
+- urban_industrial
+- coastal_terrace
+- scandinavian_interior
 
-Return ONLY a JSON array of 3 scene IDs that best match this eyewear style.`
+Return ONLY a JSON array of objects: [{ "id": "...", "reason": "..." }]`
         }
       ]
     },
@@ -145,7 +167,13 @@ Return ONLY a JSON array of 3 scene IDs that best match this eyewear style.`
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.ARRAY,
-        items: { type: Type.STRING }
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.STRING },
+            reason: { type: Type.STRING }
+          }
+        }
       }
     }
   });
@@ -171,15 +199,7 @@ export const generatePosterImage = async (
     contents: {
       parts: [
         { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
-        { text: `
-<POSTER_DIRECTIVE>
-  Product: Exact replica of the eyewear in the image.
-  Typography: Title "${config.title}", Subtitle "${config.subtitle}".
-  Material Integration: ${config.integration} into ${config.material}.
-  Layout: ${config.layout}, Typography Style: ${config.typography}.
-  Finish: Luxury brand visual standards, hyper-realistic textures.
-</POSTER_DIRECTIVE>
-` }
+        { text: `Create a luxury brand poster for eyewear. Exact product fidelity. Title: "${config.title}", Subtitle: "${config.subtitle}". Layout: ${config.layout}. Material: ${config.material}. Tone: ${config.tone}.` }
       ]
     },
     config: {
@@ -205,7 +225,7 @@ export const analyzeAndSuggestPosterConfigs = async (imageBase64: string): Promi
     contents: {
       parts: [
         { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
-        { text: "Suggest 3 luxury poster layouts. Return JSON ARRAY." }
+        { text: "Analyze eyewear and suggest 3 luxury poster designs. Return JSON array." }
       ]
     },
     config: { 
@@ -243,7 +263,7 @@ export const getPromptSuggestions = async (mode: AppMode, imageBase64?: string):
   if (imageBase64) parts.push({ inlineData: { mimeType: "image/jpeg", data: imageBase64 } });
   
   parts.push({ 
-    text: `Suggest 5 professional scene descriptions for luxury eyewear. Chinese only. JSON array of strings.` 
+    text: `Suggest 5 professional eyewear photography scene descriptions in Chinese. Return JSON array of strings.` 
   });
 
   const response = await ai.models.generateContent({
