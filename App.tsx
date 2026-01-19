@@ -3,7 +3,8 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   AppMode, NavTab, ImageSize, AspectRatio, PosterConfig, 
   GeneratedImage, ModelConfig, EyewearType,
-  EthnicityType, LightingType, FramingType, CommercialStyle, ModelVibe
+  EthnicityType, LightingType, FramingType, CommercialStyle, ModelVibe,
+  CameraType, LensType, SkinTexture, MoodType, StylePreset, TemplateItem
 } from './types';
 import { 
   generateEyewearImage, 
@@ -26,75 +27,53 @@ const convertBlobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-const LOADING_MESSAGES = [
-  "正在初始化 [CORE DIRECTIVE] 物理锁定引擎...",
-  "分析眼镜 PBR 材质与镜片折射属性...",
-  "配置 85mm 商业人像摄影镜头逻辑...",
-  "执行分层权重渲染 (Primary: Eyewear)...",
-  "同步 8K 高保真肤质修饰方案..."
-];
-
-const EYEWEAR_SCENES = [
-  { name: "侘寂风水泥背景", prompt: "Minimalist concrete studio, wabi-sabi textures, limestone gray, micro-cement floor." },
-  { name: "极简无缝墙", prompt: "Pure off-white infinity cove studio, clinical commercial lighting." },
-  { name: "现代办公视窗", prompt: "Contemporary executive office, high-rise urban skyline view, natural sunlight." },
-  { name: "私人图书室", prompt: "Walnut bookshelves, leather-bound books, low-key scholarly atmosphere." },
-  { name: "阳光露台", prompt: "Stucco wall terrace, golden hour sunset, cinematic long shadows." },
-  { name: "工业风天台", prompt: "Urban rooftop, brutalist architecture, high-contrast sky." }
-];
+const DEFAULT_CONFIG: ModelConfig = {
+  eyewearType: 'Auto-detect',
+  visualPurpose: 'Brand Campaign',
+  modelVibe: 'Calm & Intellectual',
+  ethnicity: 'East Asian',
+  gender: 'Female',
+  age: 'Adult',
+  scene: "Minimalist concrete studio, high-end photography.",
+  framing: 'Close-up',
+  camera: 'Hasselblad H6D',
+  lens: '85mm f/1.4',
+  skinTexture: 'Natural Commercial',
+  lighting: 'Softbox Diffused',
+  mood: 'Natural Soft',
+  aspectRatio: '3:4'
+};
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.DASHBOARD);
   const [activeTab, setActiveTab] = useState<NavTab>(NavTab.CREATE);
+  const [configDepth, setConfigDepth] = useState<'basic' | 'master'>('basic');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [loadingStep, setLoadingStep] = useState(0);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<GeneratedImage[]>([]);
+  
+  // 模板系统数据
+  const [templates, setTemplates] = useState<TemplateItem[]>(() => {
+    const saved = localStorage.getItem('lyra_templates');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_CONFIG);
+
+  // 管理员状态
+  const [adminPassword, setAdminPassword] = useState('');
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
+  const [newTemplateImage, setNewTemplateImage] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const [modelConfig, setModelConfig] = useState<ModelConfig>({
-    eyewearType: 'Auto-detect',
-    visualPurpose: 'Brand Campaign',
-    modelVibe: 'Calm & Intellectual',
-    ethnicity: 'East Asian',
-    gender: 'Female',
-    age: 'Adult',
-    scene: EYEWEAR_SCENES[0].prompt,
-    framing: 'Close-up',
-    camera: 'Hasselblad H6D',
-    lens: '85mm f/1.4',
-    skinTexture: 'Natural Commercial',
-    lighting: 'Softbox Diffused',
-    mood: 'Natural Soft',
-    aspectRatio: '3:4'
-  });
-
-  const [posterConfig, setPosterConfig] = useState<PosterConfig>({
-    title: 'THE VISIONARY',
-    subtitle: 'Crafted Excellence',
-    layout: 'Centered',
-    typography: 'Classic Serif',
-    integration: 'Etched into Material',
-    material: 'Brutalist Concrete',
-    tone: 'Luxury',
-    includeModel: false,
-    camera: 'Hasselblad H6D',
-    lens: '85mm f/1.4',
-    lighting: 'Softbox Diffused',
-    mood: 'Natural Soft'
-  });
+  const adminFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    let interval: any;
-    if (isGenerating) {
-      interval = setInterval(() => setLoadingStep(prev => (prev + 1) % LOADING_MESSAGES.length), 3000);
-    }
-    return () => clearInterval(interval);
-  }, [isGenerating]);
+    localStorage.setItem('lyra_templates', JSON.stringify(templates));
+  }, [templates]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
@@ -106,199 +85,275 @@ const App: React.FC = () => {
     }
   };
 
-  const handleRun = async (type: string) => {
+  const handleApplyTemplate = (template: TemplateItem) => {
+    setModelConfig(template.config);
+    if (!imageBase64) {
+      setActiveTab(NavTab.CREATE);
+      setError("请先上传您的眼镜图片");
+    } else {
+      setMode(AppMode.MODEL_CONFIG);
+      setActiveTab(NavTab.CREATE);
+    }
+  };
+
+  const handleAdminAddTemplate = async () => {
+    if (!newTemplateImage) return;
+    const newTpl: TemplateItem = {
+      id: Date.now().toString(),
+      imageUrl: newTemplateImage,
+      name: "新上传模板",
+      description: "由管理员配置",
+      config: { ...modelConfig }
+    };
+    setTemplates([newTpl, ...templates]);
+    setNewTemplateImage(null);
+    alert("模板已添加至广场");
+  };
+
+  const handleRun = async () => {
     setIsGenerating(true);
     setError(null);
     try {
       await ensureApiKey();
-      let url = '';
-      if (type === 'model') url = await generateEyewearImage(imageBase64, '1K', modelConfig);
-      else url = await generatePosterImage(imageBase64, posterConfig, '1K', modelConfig.aspectRatio);
-      
+      const url = await generateEyewearImage(imageBase64, '1K', modelConfig);
       setGeneratedImage(url);
       setMode(AppMode.RESULT);
-      setHistory(prev => [{ id: Math.random().toString(36).substr(2, 4).toUpperCase(), url, type, timestamp: Date.now() }, ...prev]);
     } catch (err: any) {
-      setError("RENDER_ERROR: 请确保上传的产品底图清晰可见。");
+      setError("渲染失败，请检查配置。");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const renderModelConfig = () => {
-    const ethnicityMap: Record<EthnicityType, string> = { 
-      'East Asian': '东亚', 'Southeast Asian': '东南亚', 'South Asian': '南亚', 
-      'Caucasian': '欧裔', 'Mediterranean': '地中海', 'Scandinavian': '北欧', 
-      'African': '非裔', 'Hispanic/Latino': '拉丁裔', 'Middle Eastern': '中东' 
-    };
-    const purposeMap: Record<CommercialStyle, string> = {
-      'E-commerce Main': '电商主图', 'Brand Campaign': '品牌大片', 'Social Media': '社媒推广', 'Lookbook': '画册样片', 'Advertising Poster': '广告海报'
-    };
-    const vibeMap: Record<ModelVibe, string> = {
-      'Calm & Intellectual': '理性知性', 'Natural & Friendly': '亲和自然', 'High-Fashion Edge': '高端冷峻', 'Athletic Energy': '动感活力', 'Professional Executive': '专业职场'
-    };
-    const framingMap: Record<FramingType, string> = {
-      'Close-up': '面部特写 (Close-up)',     // 强调材质细节
-      'Bust Shot': '胸像半身 (Bust Shot)',   // 标准肖像
-      'Upper Body': '腰部半身 (Waist-up)',   // 展示服装搭配
-      'Full Body': '全身氛围 (Full Body)'     // 强调场景和整体 Look
-    };
-    const ageMap = { 'Child': '儿童', 'Teenager': '青少年', 'Youth': '青年', 'Adult': '成熟', 'Mature': '资深' };
+  // 渲染模板广场
+  const renderTemplateGallery = () => (
+    <div className="space-y-12 animate-fade-in pb-20">
+      <div className="space-y-4 text-center max-w-xl mx-auto">
+        <h2 className="text-5xl font-serif italic text-white">模板广场</h2>
+        <p className="text-zinc-500 text-xs uppercase tracking-[0.3em] font-black">Curated Masterpiece Library</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+        {templates.length === 0 && (
+          <div className="col-span-full py-32 text-center ios-card">
+            <p className="text-zinc-600 font-black uppercase tracking-widest text-[10px]">暂无公开模板，请前往管理后台上传</p>
+          </div>
+        )}
+        {templates.map(tpl => (
+          <div 
+            key={tpl.id}
+            onClick={() => handleApplyTemplate(tpl)}
+            className="group relative aspect-[3/4] rounded-[3rem] overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-all duration-700 hover:scale-[1.02] shadow-2xl"
+          >
+            <img src={tpl.imageUrl} className="w-full h-full object-cover grayscale-[0.5] group-hover:grayscale-0 transition-all duration-700" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80 group-hover:opacity-100 transition-opacity"></div>
+            <div className="absolute bottom-10 left-10 right-10 space-y-3 translate-y-4 group-hover:translate-y-0 transition-all duration-700">
+              <h3 className="text-2xl font-serif italic text-white">{tpl.name}</h3>
+              <p className="text-zinc-400 text-[10px] uppercase tracking-widest font-bold line-clamp-1">{tpl.description}</p>
+              <div className="pt-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="px-5 py-2 rounded-full bg-white text-black text-[9px] font-black uppercase tracking-widest">立即套用</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  // 渲染配置页面
+  const renderConfig = () => {
+    const ethnicityMap = { 'East Asian': '东亚', 'Caucasian': '欧裔', 'African': '非裔', 'Hispanic/Latino': '拉丁裔' };
+    const purposeMap = { 'Brand Campaign': '品牌大片', 'E-commerce Main': '电商主图', 'Social Media': '社媒推广' };
+    const framingMap = { 'Close-up': '特写', 'Bust Shot': '胸像', 'Upper Body': '腰部半身', 'Full Body': '全身' };
 
     return (
       <div className="space-y-12 animate-fade-in pb-32 max-w-2xl mx-auto">
-        <div className="space-y-3">
-          <button onClick={() => setMode(AppMode.DASHBOARD)} className="text-[10px] text-zinc-600 uppercase tracking-widest hover:text-white transition-colors">← 返回</button>
-          <h2 className="text-4xl font-black italic font-serif text-white">商业视觉配置</h2>
-          <p className="text-zinc-600 text-[9px] font-black uppercase tracking-[0.2em]">Structural Intent Engineering</p>
+        <div className="flex items-center justify-between">
+          <h2 className="text-4xl font-serif italic text-white">视觉配置</h2>
+          <div className="flex bg-zinc-900 p-1 rounded-2xl border border-white/5">
+            <button onClick={() => setConfigDepth('basic')} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${configDepth === 'basic' ? 'bg-white text-black' : 'text-zinc-500'}`}>基础</button>
+            <button onClick={() => setConfigDepth('master')} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${configDepth === 'master' ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/40' : 'text-zinc-500'}`}>大师</button>
+          </div>
         </div>
 
-        <div className="space-y-14">
-          <SelectorGroup title="视觉策略 (Visual Strategy)" icon={<IconCreative />} color="text-yellow-400">
-             <Selector label="视觉用途" options={Object.keys(purposeMap)} current={modelConfig.visualPurpose} onChange={(v: any) => setModelConfig(p => ({...p, visualPurpose: v}))} labelMap={purposeMap} />
-             <Selector label="模特状态" options={Object.keys(vibeMap)} current={modelConfig.modelVibe} onChange={(v: any) => setModelConfig(p => ({...p, modelVibe: v}))} labelMap={vibeMap} />
-          </SelectorGroup>
-
-          <SelectorGroup title="角色特征 (Model Profile)" icon={<IconModel />} color="text-white">
+        <div className="space-y-10">
+          <SelectorGroup title="角色模型" icon={<IconModel />} color="text-white">
             <Selector label="族裔" options={Object.keys(ethnicityMap)} current={modelConfig.ethnicity} onChange={(v: any) => setModelConfig(p => ({...p, ethnicity: v}))} labelMap={ethnicityMap} />
             <div className="grid grid-cols-2 gap-8">
-              <Selector label="年龄段" options={Object.keys(ageMap)} current={modelConfig.age} onChange={(v: any) => setModelConfig(p => ({...p, age: v}))} labelMap={ageMap} />
-              <Selector label="模特性别" options={['Female', 'Male', 'Non-binary']} current={modelConfig.gender} onChange={(v: any) => setModelConfig(p => ({...p, gender: v}))} labelMap={{'Female':'女性','Male':'男性','Non-binary':'中性'}} />
+              <Selector label="年龄段" options={['Youth', 'Adult', 'Mature']} current={modelConfig.age} onChange={(v: any) => setModelConfig(p => ({...p, age: v}))} labelMap={{'Youth':'青年','Adult':'成熟','Mature':'资深'}} />
+              <Selector label="性别" options={['Female', 'Male']} current={modelConfig.gender} onChange={(v: any) => setModelConfig(p => ({...p, gender: v}))} labelMap={{'Female':'女性','Male':'男性'}} />
             </div>
           </SelectorGroup>
 
-          <SelectorGroup title="构图与视角 (Composition & Perspective)" icon={<IconCamera />} color="text-blue-400">
-            <Selector 
-              label="景别选择 (Framing)" 
-              options={Object.keys(framingMap)} 
-              current={modelConfig.framing} 
-              onChange={(v: any) => setModelConfig(p => ({...p, framing: v}))} 
-              labelMap={framingMap} 
-            />
-            { (modelConfig.framing === 'Full Body' || modelConfig.framing === 'Upper Body') && (
-              <p className="text-[9px] text-zinc-500 uppercase tracking-[0.2em] font-black px-1 animate-pulse">
-                注：全身模式下将自动匹配时尚穿搭以增强氛围感。
-              </p>
-            )}
+          <SelectorGroup title="摄影规格" icon={<IconCamera />} color="text-blue-400">
+            <Selector label="景别选择" options={Object.keys(framingMap)} current={modelConfig.framing} onChange={(v: any) => setModelConfig(p => ({...p, framing: v}))} labelMap={framingMap} />
+            <Selector label="商业用途" options={Object.keys(purposeMap)} current={modelConfig.visualPurpose} onChange={(v: any) => setModelConfig(p => ({...p, visualPurpose: v}))} labelMap={purposeMap} />
           </SelectorGroup>
 
-          <div className="p-10 bg-zinc-900/10 rounded-[3rem] border border-white/[0.03] space-y-8">
-            <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-white/80">拍摄环境 (Environment)</h3>
-            <div className="flex flex-wrap gap-3">
-              {EYEWEAR_SCENES.map(s => (
-                <button 
-                  key={s.name} 
-                  onClick={() => setModelConfig(p => ({...p, scene: s.prompt}))}
-                  className={`px-5 py-4 rounded-2xl text-[10px] font-bold border transition-all duration-300 ${modelConfig.scene === s.prompt ? 'bg-white text-black border-white shadow-[0_15px_30px_rgba(255,255,255,0.1)] scale-105' : 'bg-zinc-950/40 text-zinc-500 border-white/5 hover:border-white/20'}`}
-                >
-                  {s.name}
-                </button>
-              ))}
-            </div>
-          </div>
+          {configDepth === 'master' && (
+            <SelectorGroup title="光学渲染 (Master Only)" icon={<IconCreative />} color="text-yellow-400">
+               <Selector label="摄影机" options={['Hasselblad H6D', 'Sony A7R V', 'Leica M11']} current={modelConfig.camera} onChange={(v: any) => setModelConfig(p => ({...p, camera: v}))} />
+               <Selector label="灯光策略" options={['Softbox Diffused', 'Butterfly (Paramount)', 'Rembrandt', 'Neon Noir']} current={modelConfig.lighting} onChange={(v: any) => setModelConfig(p => ({...p, lighting: v}))} />
+               <Selector label="胶片色调" options={['Natural Soft', 'Vintage Film', 'Cinematic Teal & Orange']} current={modelConfig.mood} onChange={(v: any) => setModelConfig(p => ({...p, mood: v}))} />
+            </SelectorGroup>
+          )}
 
-          <Button onClick={() => handleRun('model')} className="w-full h-20 rounded-3xl bg-white text-black font-black text-[12px] shadow-[0_30px_60px_rgba(255,255,255,0.1)] active:scale-95" isLoading={isGenerating}>
-            生成高端模特大片
+          <Button onClick={handleRun} className={`w-full h-24 rounded-[2.5rem] font-black text-[12px] shadow-2xl transition-all duration-500 ${configDepth === 'master' ? 'bg-blue-600 text-white' : 'bg-white text-black'}`} isLoading={isGenerating}>
+            {configDepth === 'master' ? '执行大师级渲染' : '即刻生成大片'}
           </Button>
         </div>
       </div>
     );
   };
 
+  // 渲染管理员页面
+  const renderAdmin = () => (
+    <div className="max-w-4xl mx-auto space-y-12 animate-fade-in">
+      <div className="space-y-4">
+        <h2 className="text-5xl font-serif italic text-white">管理员后台</h2>
+        <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Template & Logic Management</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+        <div className="space-y-8">
+           <div 
+             onClick={() => adminFileInputRef.current?.click()}
+             className="aspect-[3/4] rounded-[2.5rem] bg-zinc-900 border border-dashed border-white/10 flex items-center justify-center cursor-pointer overflow-hidden"
+           >
+             {newTemplateImage ? (
+               <img src={newTemplateImage} className="w-full h-full object-cover" />
+             ) : (
+               <span className="text-zinc-500 font-bold uppercase tracking-widest text-[9px]">点击上传模板底图</span>
+             )}
+             <input type="file" ref={adminFileInputRef} className="hidden" onChange={async (e) => {
+               if (e.target.files?.[0]) setNewTemplateImage(`data:image/jpeg;base64,${await convertBlobToBase64(e.target.files[0])}`);
+             }} />
+           </div>
+           <Button onClick={handleAdminAddTemplate} className="w-full h-16 rounded-2xl">发布至模板广场</Button>
+        </div>
+
+        <div className="space-y-8">
+           <div className="p-8 ios-card space-y-6">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">当前模板 Prompt 参数映射</h4>
+              {renderConfig()}
+           </div>
+           <div className="space-y-4">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">已上传列表</h4>
+              <div className="space-y-3">
+                {templates.map(t => (
+                  <div key={t.id} className="p-4 bg-zinc-900/50 rounded-xl flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <img src={t.imageUrl} className="w-10 h-10 rounded-lg object-cover" />
+                      <span className="text-xs font-bold text-zinc-300">{t.name}</span>
+                    </div>
+                    <button onClick={() => setTemplates(templates.filter(x => x.id !== t.id))} className="text-red-900 text-[10px] font-black uppercase hover:text-red-500 transition-colors">删除</button>
+                  </div>
+                ))}
+              </div>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-black text-zinc-100 flex flex-col lg:flex-row font-sans overflow-x-hidden">
+      {/* 侧边导航 */}
       <aside className="hidden lg:flex flex-col w-72 bg-zinc-950 border-r border-white/5 h-screen sticky top-0 z-50">
         <div className="p-12 flex items-center gap-3">
           <div className="w-9 h-9 bg-white text-black rounded-xl font-serif font-black flex items-center justify-center text-2xl">L</div>
           <span className="font-black text-2xl font-serif italic text-white">Lyra</span>
         </div>
         <nav className="flex-1 px-8 py-4 space-y-2">
-          <NavItem active={activeTab === NavTab.CREATE} onClick={() => { setActiveTab(NavTab.CREATE); setMode(AppMode.DASHBOARD); }} icon={<IconCreative />} label="创作中心" />
+          <NavItem active={activeTab === NavTab.CREATE} onClick={() => { setActiveTab(NavTab.CREATE); setMode(AppMode.DASHBOARD); }} icon={<IconCreative />} label="创作工坊" />
+          <NavItem active={activeTab === NavTab.TEMPLATES} onClick={() => { setActiveTab(NavTab.TEMPLATES); setMode(AppMode.MODEL_SHOT); }} icon={<IconPoster />} label="模板广场" />
           <NavItem active={activeTab === NavTab.GALLERY} onClick={() => setActiveTab(NavTab.GALLERY)} icon={<IconGallery />} label="作品集" />
+          <div className="pt-20">
+             <NavItem active={activeTab === NavTab.ADMIN} onClick={() => { setActiveTab(NavTab.ADMIN); setMode(AppMode.ADMIN); }} icon={<IconSettings />} label="后台管理" />
+          </div>
         </nav>
       </aside>
 
+      {/* 主内容区 */}
       <main className="flex-1 flex flex-col min-h-screen">
         <div className="container mx-auto px-6 py-12 lg:px-20 lg:py-20">
-          <div className="grid grid-cols-1 xl:grid-cols-12 gap-16">
-            <div className="xl:col-span-7">
-              <div className="aspect-[3/4] rounded-[3.5rem] overflow-hidden border border-white/5 bg-[#080808] flex items-center justify-center relative shadow-2xl">
-                {!imageBase64 ? (
-                  <div className="p-12 text-center space-y-12 animate-fade-in">
-                     <h1 className="text-6xl font-black font-serif italic text-white leading-tight">眼镜摄影工坊</h1>
-                     <div className="flex flex-col gap-4 max-w-xs mx-auto">
-                        <Button onClick={() => fileInputRef.current?.click()} className="rounded-3xl h-16"><IconUpload /> <span className="ml-3">上传眼镜资产</span></Button>
-                        <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
-                     </div>
+          
+          {activeTab === NavTab.TEMPLATES && renderTemplateGallery()}
+          {activeTab === NavTab.ADMIN && renderAdmin()}
+
+          {activeTab === NavTab.CREATE && (
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-16">
+              <div className="xl:col-span-7">
+                <div className="aspect-[3/4] rounded-[3.5rem] overflow-hidden border border-white/5 bg-[#080808] flex items-center justify-center relative shadow-2xl">
+                  {!imageBase64 ? (
+                    <div className="p-12 text-center space-y-12 animate-fade-in">
+                       <h1 className="text-7xl font-black font-serif italic text-white leading-tight tracking-tight">上传您的资产</h1>
+                       <div className="flex flex-col gap-4 max-w-xs mx-auto">
+                          <Button onClick={() => fileInputRef.current?.click()} className="rounded-3xl h-20 text-sm"><IconUpload /> <span className="ml-3">上传眼镜 PNG/JPG</span></Button>
+                          <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+                          <p className="text-zinc-600 text-[9px] uppercase tracking-widest">请确保眼镜主体清晰，背景尽可能纯净</p>
+                       </div>
+                    </div>
+                  ) : (
+                    <>
+                      <img src={generatedImage || previewUrl!} className={`max-w-full max-h-full object-contain ${isGenerating ? 'opacity-30 blur-3xl grayscale transition-all duration-1000' : 'transition-all duration-700'}`} />
+                      {isGenerating && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-10 bg-black/40 backdrop-blur-3xl px-12 text-center">
+                           <div className="relative">
+                              <div className="w-24 h-24 border-2 border-white/10 rounded-full"></div>
+                              <div className="absolute inset-0 w-24 h-24 border-t-2 border-white rounded-full animate-spin"></div>
+                           </div>
+                           <p className="text-[12px] text-white uppercase tracking-[0.4em] font-black animate-pulse">正在执行物理锁定渲染...</p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="xl:col-span-5">
+                {mode === AppMode.DASHBOARD && (
+                  <div className="space-y-10">
+                    <h2 className="text-6xl font-black italic font-serif text-white">开始创作</h2>
+                    <div className="grid gap-6">
+                       <FeatureCard title="商业模特试戴" description="一键配置模特属性，支持物理光影锁定与折射追踪。" icon={<IconModel />} onClick={() => setMode(AppMode.MODEL_CONFIG)} />
+                       <FeatureCard title="从模板生成" description="套用高质量大师模板，一键获得品牌级视觉效果。" icon={<IconPoster />} onClick={() => setActiveTab(NavTab.TEMPLATES)} />
+                    </div>
                   </div>
-                ) : (
-                  <>
-                    <img src={generatedImage || previewUrl!} className={`max-w-full max-h-full object-contain ${isGenerating ? 'opacity-30 blur-md grayscale transition-all duration-1000' : 'transition-all duration-700'}`} />
-                    {isGenerating && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-10 bg-black/40 backdrop-blur-xl px-12 text-center">
-                         <div className="relative">
-                            <div className="w-20 h-20 border-2 border-white/10 rounded-full"></div>
-                            <div className="absolute inset-0 w-20 h-20 border-t-2 border-white rounded-full animate-spin"></div>
-                         </div>
-                         <div className="space-y-4">
-                            <p className="text-[11px] text-white uppercase tracking-[0.3em] font-black animate-pulse">{LOADING_MESSAGES[loadingStep]}</p>
-                            <div className="w-48 h-[1px] bg-white/10 mx-auto overflow-hidden">
-                               <div className="w-full h-full bg-white origin-left animate-[loadingBar_3s_infinite]"></div>
-                            </div>
-                         </div>
-                      </div>
-                    )}
-                  </>
+                )}
+                {mode === AppMode.MODEL_CONFIG && renderConfig()}
+                {mode === AppMode.RESULT && generatedImage && (
+                  <div className="space-y-10 animate-fade-in">
+                    <h2 className="text-6xl font-serif italic text-white">渲染完成</h2>
+                    <div className="space-y-4">
+                      <Button onClick={() => {
+                        const link = document.createElement('a');
+                        link.href = generatedImage!;
+                        link.download = `lyra-shoot.png`;
+                        link.click();
+                      }} className="w-full h-24 rounded-[2.5rem] bg-white text-black font-black text-sm">导出商业级原图</Button>
+                      <Button variant="outline" onClick={() => setMode(AppMode.DASHBOARD)} className="w-full h-24 rounded-[2.5rem] text-sm">重新配置</Button>
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
-
-            <div className="xl:col-span-5">
-              {mode === AppMode.DASHBOARD && (
-                <div className="space-y-10">
-                  <h2 className="text-5xl font-black italic font-serif text-white">模式决策</h2>
-                  <div className="grid gap-6">
-                     <FeatureCard title="商业模特试戴" description="系统自动识别镜片类型，支持从细节特写到全身 Lookbook 的全场景渲染。" icon={<IconModel />} onClick={() => setMode(AppMode.MODEL_CONFIG)} />
-                     <FeatureCard title="品牌海报工坊" description="基于材质交互与空间构图，一键生成高净值海报。" icon={<IconPoster />} onClick={() => setMode(AppMode.POSTER_GENERATION)} />
-                  </div>
-                </div>
-              )}
-              {mode === AppMode.MODEL_CONFIG && imageBase64 && renderModelConfig()}
-              {mode === AppMode.RESULT && generatedImage && (
-                <div className="space-y-10 animate-fade-in">
-                  <div className="space-y-2">
-                    <h2 className="text-5xl font-serif italic text-white">渲染完成</h2>
-                    <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Success: Asset Ready for Commercial Use</p>
-                  </div>
-                  <div className="space-y-4">
-                    <Button onClick={() => {
-                      const link = document.createElement('a');
-                      link.href = generatedImage!;
-                      link.download = `eyewear-${Date.now()}.png`;
-                      link.click();
-                    }} className="w-full h-20 rounded-3xl bg-white text-black font-black">导出 8K 商业原图</Button>
-                    <Button variant="outline" onClick={() => setMode(AppMode.DASHBOARD)} className="w-full h-20 rounded-3xl">重新配置</Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          )}
         </div>
       </main>
-      
-      {error && <div className="fixed bottom-10 left-1/2 -translate-x-1/2 ios-glass px-10 py-6 rounded-[2.5rem] text-red-400 text-[10px] font-black z-[500] uppercase tracking-widest border-red-900/20">{error}</div>}
-      <style>{`
-        @keyframes loadingBar {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
-        }
-      `}</style>
+
+      {error && <div className="fixed bottom-10 left-1/2 -translate-x-1/2 ios-glass px-10 py-6 rounded-3xl text-red-400 text-[10px] font-black z-[500] uppercase tracking-widest border-red-900/20">{error}</div>}
     </div>
   );
 };
 
+// 辅助图标
+const IconSettings = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+);
+
 const NavItem = ({ active, onClick, icon, label }: any) => (
-  <div onClick={onClick} className={`flex items-center gap-5 px-6 py-5 rounded-2xl cursor-pointer transition-all ${active ? 'bg-white text-black font-bold scale-[1.02] shadow-xl' : 'text-zinc-600 hover:text-white hover:bg-white/5'}`}>
+  <div onClick={onClick} className={`flex items-center gap-5 px-6 py-5 rounded-2xl cursor-pointer transition-all duration-300 ${active ? 'bg-white text-black font-bold scale-[1.02] shadow-xl' : 'text-zinc-600 hover:text-white hover:bg-white/5'}`}>
     {icon} <span className="text-[10px] tracking-[0.2em] uppercase font-black">{label}</span>
   </div>
 );
@@ -306,9 +361,8 @@ const NavItem = ({ active, onClick, icon, label }: any) => (
 const SelectorGroup = ({ title, icon, color, children }: any) => (
   <div className="space-y-10 p-10 bg-zinc-900/10 rounded-[3rem] border border-white/[0.03] shadow-inner">
     <div className="flex items-center gap-4">
-      <div className={`p-3 rounded-2xl ${color} bg-opacity-10 flex items-center justify-center border border-current/10 shadow-lg`}>{icon}</div>
-      <h3 className="text-[12px] font-black uppercase tracking-[0.2em] text-white/90">{title}</h3>
-      <div className="flex-1 h-[1px] bg-gradient-to-r from-zinc-800 to-transparent"></div>
+      <div className={`p-3 rounded-2xl ${color} bg-opacity-10 flex items-center justify-center border border-current/10`}>{icon}</div>
+      <h3 className="text-[13px] font-black uppercase tracking-[0.2em] text-white/90">{title}</h3>
     </div>
     <div className="space-y-12">{children}</div>
   </div>
@@ -322,7 +376,7 @@ const Selector = ({ label, options, current, onChange, labelMap }: any) => (
         <button
           key={opt}
           onClick={() => onChange(opt)}
-          className={`px-5 py-4 rounded-2xl text-[10px] font-bold border transition-all duration-300 ${current === opt ? 'bg-white text-black border-white shadow-lg scale-105' : 'bg-zinc-950/40 text-zinc-500 border-white/5 hover:border-white/20 hover:text-zinc-200'}`}
+          className={`px-5 py-4 rounded-2xl text-[10px] font-bold border transition-all duration-500 ${current === opt ? 'bg-white text-black border-white shadow-xl scale-105' : 'bg-zinc-950/40 text-zinc-500 border-white/5 hover:border-white/20'}`}
         >
           {labelMap ? (labelMap[opt] || opt) : opt}
         </button>

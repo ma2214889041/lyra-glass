@@ -5,18 +5,19 @@ export enum AppMode {
   MODEL_CONFIG = 'MODEL_CONFIG',
   POSTER_GENERATION = 'POSTER_GENERATION',
   PRESET_STYLES = 'PRESET_STYLES',
-  RESULT = 'RESULT'
+  RESULT = 'RESULT',
+  ADMIN = 'ADMIN'
 }
 
 export enum NavTab {
   CREATE = 'CREATE',
+  TEMPLATES = 'TEMPLATES',
   GALLERY = 'GALLERY',
-  PROFILE = 'PROFILE'
+  ADMIN = 'ADMIN'
 }
 
 export type ImageSize = '1K' | '2K' | '4K';
 export type AspectRatio = '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
-export type CameraFacingMode = 'user' | 'environment';
 export type FramingType = 'Close-up' | 'Bust Shot' | 'Upper Body' | 'Full Body';
 
 export type EyewearType = 'Optical' | 'Sunglasses' | 'Sports' | 'Auto-detect';
@@ -33,6 +34,21 @@ export type EthnicityType = 'East Asian' | 'Southeast Asian' | 'South Asian' | '
 export type LightingType = 'Butterfly (Paramount)' | 'Rembrandt' | 'Rim Light' | 'Softbox Diffused' | 'Neon Noir' | 'Golden Hour';
 export type MoodType = 'Cinematic Teal & Orange' | 'Classic Black & White' | 'High-Key Clean' | 'Low-Key Moody' | 'Vintage Film' | 'Natural Soft';
 
+export interface StylePreset {
+  id: string;
+  name: string;
+  description: string;
+  config: Partial<ModelConfig>;
+}
+
+export interface TemplateItem {
+  id: string;
+  imageUrl: string;
+  name: string;
+  description: string;
+  config: ModelConfig;
+}
+
 export interface GeneratedImage {
   id: string;
   url: string;
@@ -40,20 +56,14 @@ export interface GeneratedImage {
   timestamp: number;
 }
 
-export type PosterLayout = 'Centered' | 'Rule of Thirds' | 'Magazine Cover' | 'Minimalist Edge' | 'Diagonal Dynamic';
-export type PosterTypography = 'Classic Serif' | 'Modern Sans-Serif' | 'Bold Display' | 'Elegant Script';
-export type PosterTone = 'Luxury' | 'Avant-Garde' | 'Industrial' | 'Organic';
-export type TypographyIntegration = 'Standard Print' | 'Etched into Material' | '3D Physical Object' | 'Light Projection';
-export type SetMaterial = 'Brutalist Concrete' | 'White Marble' | 'Dark Silk' | 'Raw Basalt' | 'Brushed Aluminum';
-
 export interface PosterConfig {
   title: string;
   subtitle: string;
-  layout: PosterLayout;
-  typography: PosterTypography;
-  integration: TypographyIntegration;
-  material: SetMaterial;
-  tone: PosterTone;
+  layout: string;
+  typography: string;
+  integration: string;
+  material: string;
+  tone: string;
   includeModel: boolean;
   camera: CameraType;
   lens: LensType;

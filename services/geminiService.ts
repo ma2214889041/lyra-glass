@@ -4,10 +4,16 @@ import { ImageSize, AspectRatio, PosterConfig, AppMode, ModelConfig, EyewearType
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+const ATMOSPHERE_ENHANCEMENT: Record<string, string> = {
+  'High-Fashion Edge': "Editorial avant-garde styling, high-contrast shadows, sharp silhouettes, urban brutalist background. Cold color temperature.",
+  'Natural & Friendly': "Warm morning sunlight, soft linen clothing, candid posture, cozy garden or sunlit library setting. Dappled light shadows.",
+  'Professional Executive': "Clean office architecture, glass reflections, sharp corporate attire, cool-toned professional lighting with luxury textures.",
+  'Athletic Energy': "Dynamic outdoor lighting, premium activewear textures, morning dew or sweat sheen, high-speed shutter aesthetic.",
+  'Calm & Intellectual': "Soft diffused interior light, minimalist wooden textures, neutral tones, scholarly atmosphere with soft depth of field."
+};
+
 /**
  * [CORE DIRECTIVE] - 系统级硬约束
- * 永远锁死产品细节，不接受任何“艺术发挥”
- * 针对透光度与景别聚焦进行了深度强化
  */
 const SYSTEM_INSTRUCTION = `
 [CRITICAL PRODUCT FIDELITY REQUIREMENT - 100% REDUCTION]
@@ -16,46 +22,32 @@ const SYSTEM_INSTRUCTION = `
    - If lenses are CLEAR in the reference, they MUST remain perfectly transparent in the output. 
    - The model's eyes and the skin behind the lenses must be SHARP, CLEAR, and visible with realistic optical refraction. 
    - ZERO tolerance for milky, cloudy, or opaque artifacts on the lenses.
-3. No modification of frame shape, materials (acetate/metal/titanium), bridge structure, or temple curvature.
-4. AUTO-DETECTION: Analyze the reference image for lens properties. For OPTICAL glasses, ensure light transmission is 100% accurate. For SUNGLASSES, match the tint density exactly.
+3. PHYSICAL SHADOWS: The eyewear must cast realistic physical shadows on the model's face (bridge of nose, temples). Lenses must show subtle environmental reflections to avoid a "photoshopped sticker" look.
+4. No modification of frame shape, materials, or structure.
 
 [DYNAMIC FRAMING & FOCUS PROTOCOL]
-Crucial instruction for non-close-up shots:
 - IF Framing is 'Upper Body' or 'Full Body':
   - The eyewear MUST remain the absolute sharpest element in the entire image (Peak Focus).
-  - Do NOT reduce eyewear detail due to distance. The model's pose and outfit are secondary context to showcase the eyewear style.
-  - Use a shallow depth of field (f/1.4 - f/2.8 equivalent) to keep the eyewear tack sharp while softly blurring the background environment to create depth and atmosphere.
-- IF Framing is 'Close-up': Focus is macro-sharp on frame texture and lens coatings.
+  - Use background compression (bokeh) to separate subject from environment.
+- IF Framing is 'Close-up': Macro focus on frame texture and lens coatings.
 
-Any deviation from the reference eyewear's properties is an absolute failure, regardless of the shot distance.
+Any deviation from the reference eyewear's physical properties is an absolute failure.
 `;
 
-/**
- * [DEVELOPER PROMPT] - 成像质量标准
- */
 const DEVELOPER_PROMPT = `
 [TECHNICAL RENDERING STANDARDS]
-- Advanced Optical Ray-Tracing: Simulate exact light transmission and refraction through glass or polycarbonate materials.
-- PBR (Physically Based Rendering): Lenses must exhibit high-fidelity surface properties (Reflection/Refraction/Transparency) based on the input image.
-- Zero Cloudiness: Lenses must remain perfectly clear where the reference shows transparency. No "foggy" white layers on lenses.
-- Commercial Photography Quality: Photorealistic skin texture with natural pores. Eyewear must be in tack-sharp focus (f/8 equivalent sharpness).
+- Advanced Optical Ray-Tracing: Simulate exact light transmission and refraction.
+- PBR (Physically Based Rendering): High-fidelity surface properties for metal, acetate, and glass.
+- Commercial Photography Quality: Photorealistic skin texture with natural pores. Tack-sharp focus on the product.
 `;
 
 const LIGHTING_INTENT_MAPPING: Record<string, string> = {
-  'Butterfly (Paramount)': 'Top-front key light for symmetrical horizontal rim highlights on the frame.',
-  'Rembrandt': '45-degree directional light for 3D volume and characteristic product shadows.',
-  'Rim Light': 'Strong backlighting to create a luminous halo separating frame edges from background.',
-  'Softbox Diffused': 'Wraparound soft box illumination, creating even gradients on acetate surfaces.',
-  'Neon Noir': 'Dual-tone LED lighting with saturated specular reflections in the lenses.',
+  'Butterfly (Paramount)': 'Top-front key light for symmetrical horizontal rim highlights.',
+  'Rembrandt': '45-degree directional light for 3D volume and triangular eye-light.',
+  'Rim Light': 'Strong backlighting to create a luminous halo separating edges from background.',
+  'Softbox Diffused': 'Wraparound soft box illumination, even gradients.',
+  'Neon Noir': 'Dual-tone LED lighting with saturated specular reflections.',
   'Golden Hour': 'Warm low-angle natural light (5600K) for honey-toned highlights.'
-};
-
-const VISUAL_PURPOSE_MAPPING: Record<string, string> = {
-  'E-commerce Main': 'Clean, high-contrast, centered. Product details are extremely sharp. White or neutral background.',
-  'Brand Campaign': 'Atmospheric storytelling. High-end editorial composition with deep textures.',
-  'Social Media': 'Lifestyle-oriented, casual yet premium. Authentic snapshot quality with professional depth.',
-  'Lookbook': 'Soft even lighting, neutral tones. Focus on accessory integration with style.',
-  'Advertising Poster': 'Dynamic bold composition, high impact lighting, dramatic negative space.'
 };
 
 export const ensureApiKey = async (): Promise<void> => {
@@ -82,33 +74,28 @@ export const generateEyewearImage = async (
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-3-pro-image-preview';
 
-  // 根据景别动态调整对模特姿势和服装的要求
-  let postureAndOutfitInstruction = "";
-  if (modelConfig.framing === 'Full Body' || modelConfig.framing === 'Upper Body') {
-    postureAndOutfitInstruction = `
-    - Pose: Dynamic, high-fashion editorial pose that showcases the eyewear clearly. Avoid hands blocking the frame front or temples.
-    - Outfit: Stylized contemporary fashion that complements the eyewear vibe (e.g., if eyewear is sporty, outfit is premium activewear; if luxury, outfit is tailored chic).
-    `;
-  } else {
-    postureAndOutfitInstruction = "- Pose: Natural head tilt, focusing attention on the eyes and eyewear. Hair styled away from the frame front, bridge, and temples.";
-  }
+  const atmosphericContext = ATMOSPHERE_ENHANCEMENT[modelConfig.modelVibe] || "";
+  
+  let postureInstruction = modelConfig.framing === 'Full Body' || modelConfig.framing === 'Upper Body' 
+    ? "Dynamic high-fashion pose that emphasizes the eyewear's profile. Editorial interaction with environment."
+    : "Natural head tilt, direct eye contact through lenses, hair styled behind ears to show temples.";
 
   const userPrompt = `
   [PRIMARY SUBJECT — THE PRODUCT]
-  - Subject: The Eyewear in the reference image.
-  - Requirement: 100% exact reproduction of frame and lens light transmission.
-  - Optical Performance: Ensure lenses are perfectly transparent or tinted exactly as in the reference. Eyes must be clearly visible through clear lenses.
+  - Subject: The Eyewear from the reference image. 100% fidelity.
+  - Lens Detail: Absolute clarity, eyes visible through lenses if clear.
 
-  [SECONDARY SUBJECT — THE MODEL]
-  - Identity: ${modelConfig.ethnicity} ${modelConfig.gender}, Age: ${modelConfig.age}.
-  - Vibe: ${modelConfig.modelVibe}.
-  - Framing Priority: The shot is a ${modelConfig.framing}. Ensure the focus is critical on the eyewear.
-  ${postureAndOutfitInstruction}
-
-  [TERTIARY CONTEXT — COMMERCIAL EXECUTION]
-  - Visual Purpose: ${VISUAL_PURPOSE_MAPPING[modelConfig.visualPurpose] || modelConfig.visualPurpose}
+  [ATMOSPHERE & CONTEXT]
+  ${atmosphericContext}
   - Environment: ${modelConfig.scene}
-  - Lighting Intent: ${LIGHTING_INTENT_MAPPING[modelConfig.lighting] || modelConfig.lighting}
+  - Mood & Posture: ${postureInstruction}
+
+  [PHOTOGRAPHY SPECIFICATION]
+  - Visual Style: ${modelConfig.visualPurpose}
+  - Shot Type: ${modelConfig.framing}
+  - Gear: ${modelConfig.camera} with ${modelConfig.lens}
+  - Lighting: ${LIGHTING_INTENT_MAPPING[modelConfig.lighting] || modelConfig.lighting}
+  - Final Finish: ${modelConfig.mood}, skin texture set to ${modelConfig.skinTexture}.
   `;
 
   try {
@@ -140,25 +127,6 @@ export const generateEyewearImage = async (
   }
 };
 
-export const getPromptSuggestions = async (mode: AppMode, imageBase64?: string): Promise<string[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const model = 'gemini-3-flash-preview';
-  const prompt = "Suggest 3 creative and realistic high-end commercial eyewear photography scene descriptions (max 12 words). Focus on luxury textures. Return JSON array of strings.";
-  try {
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: { type: Type.ARRAY, items: { type: Type.STRING } }
-      }
-    });
-    return JSON.parse(response.text.trim());
-  } catch (e) {
-    return ["Minimalist marble loft", "High-rise executive window", "Sunset stucco wall"];
-  }
-};
-
 export const generatePosterImage = async (imageBase64: string, config: PosterConfig, size: ImageSize, aspectRatio: AspectRatio = '3:4'): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const model = 'gemini-3-pro-image-preview';
@@ -184,5 +152,54 @@ export const generatePosterImage = async (imageBase64: string, config: PosterCon
     throw new Error("POSTER_FAILED");
   } catch (error) {
     return handleGeminiError(error);
+  }
+};
+
+// Fix: Implement and export getPromptSuggestions to provide AI-generated scene descriptions for the PromptEnhancer component.
+export const getPromptSuggestions = async (mode: AppMode, imageBase64?: string): Promise<string[]> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const parts: any[] = [];
+  if (imageBase64) {
+    parts.push({
+      inlineData: {
+        mimeType: "image/jpeg",
+        data: imageBase64
+      }
+    });
+  }
+  
+  parts.push({
+    text: `Generate 5 creative photography scene descriptions in Chinese for a high-end eyewear commercial shoot. The application mode is ${mode}. Suggestions should be short, evocative, and suitable for a professional fashion shoot. Return as a JSON array of strings.`
+  });
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: { parts },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.STRING
+          }
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) return [];
+    return JSON.parse(text);
+  } catch (error) {
+    console.error("Prompt suggestion error:", error);
+    // Return high-quality fallbacks if the API call fails
+    return [
+      "极简主义水泥工作室，配合硬朗冷色调光影。",
+      "自然午后暖阳，透过绿植形成的斑驳光影。",
+      "都市霓虹夜景，带有电影感的蓝橘色调对比。",
+      "高端行政走廊，通透大面积玻璃墙与城市远景。",
+      "法式复古图书馆，柔和的书卷气与自然漫反射光。"
+    ];
   }
 };
