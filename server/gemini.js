@@ -1,10 +1,6 @@
+import { GoogleGenAI } from "@google/genai";
 
-import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { ImageSize, AspectRatio, PosterConfig, AppMode, ModelConfig, EyewearType } from "../types";
-
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-const ATMOSPHERE_ENHANCEMENT: Record<string, string> = {
+const ATMOSPHERE_ENHANCEMENT = {
   'High-Fashion Edge': "Editorial avant-garde styling, high-contrast shadows, sharp silhouettes, urban brutalist background. Cold color temperature.",
   'Natural & Friendly': "Warm morning sunlight, soft linen clothing, candid posture, cozy garden or sunlit library setting. Dappled light shadows.",
   'Professional Executive': "Clean office architecture, glass reflections, sharp corporate attire, cool-toned professional lighting with luxury textures.",
@@ -12,15 +8,12 @@ const ATMOSPHERE_ENHANCEMENT: Record<string, string> = {
   'Calm & Intellectual': "Soft diffused interior light, minimalist wooden textures, neutral tones, scholarly atmosphere with soft depth of field."
 };
 
-/**
- * [CORE DIRECTIVE] - 系统级硬约束
- */
 const SYSTEM_INSTRUCTION = `
 [CRITICAL PRODUCT FIDELITY REQUIREMENT - 100% REDUCTION]
 1. The uploaded eyewear reference image must be reproduced with 100% pixel-accurate fidelity. This is a HARD CONSTRAINT.
-2. OPTICAL TRANSPARENCY & LIGHT TRANSMISSION: Strictly maintain the exact transparency, translucency level, and tint of the lenses. 
-   - If lenses are CLEAR in the reference, they MUST remain perfectly transparent in the output. 
-   - The model's eyes and the skin behind the lenses must be SHARP, CLEAR, and visible with realistic optical refraction. 
+2. OPTICAL TRANSPARENCY & LIGHT TRANSMISSION: Strictly maintain the exact transparency, translucency level, and tint of the lenses.
+   - If lenses are CLEAR in the reference, they MUST remain perfectly transparent in the output.
+   - The model's eyes and the skin behind the lenses must be SHARP, CLEAR, and visible with realistic optical refraction.
    - ZERO tolerance for milky, cloudy, or opaque artifacts on the lenses.
 3. PHYSICAL SHADOWS: The eyewear must cast realistic physical shadows on the model's face (bridge of nose, temples). Lenses must show subtle environmental reflections to avoid a "photoshopped sticker" look.
 4. No modification of frame shape, materials, or structure.
@@ -41,7 +34,7 @@ const DEVELOPER_PROMPT = `
 - Commercial Photography Quality: Photorealistic skin texture with natural pores. Tack-sharp focus on the product.
 `;
 
-const LIGHTING_INTENT_MAPPING: Record<string, string> = {
+const LIGHTING_INTENT_MAPPING = {
   'Butterfly (Paramount)': 'Top-front key light for symmetrical horizontal rim highlights.',
   'Rembrandt': '45-degree directional light for 3D volume and triangular eye-light.',
   'Rim Light': 'Strong backlighting to create a luminous halo separating edges from background.',
@@ -50,33 +43,21 @@ const LIGHTING_INTENT_MAPPING: Record<string, string> = {
   'Golden Hour': 'Warm low-angle natural light (5600K) for honey-toned highlights.'
 };
 
-export const ensureApiKey = async (): Promise<void> => {
-  if (window.aistudio) {
-    const hasKey = await window.aistudio.hasSelectedApiKey();
-    if (!hasKey) {
-      await window.aistudio.openSelectKey();
-    }
+const getAI = () => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY 未配置');
   }
+  return new GoogleGenAI({ apiKey });
 };
 
-const handleGeminiError = async (error: any) => {
-  if (error?.message?.includes("Requested entity was not found.") && window.aistudio) {
-    await window.aistudio.openSelectKey();
-  }
-  throw error;
-};
-
-export const generateEyewearImage = async (
-  imageBase64: string,
-  size: ImageSize,
-  modelConfig: ModelConfig
-): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const generateEyewearImage = async (imageBase64, size, modelConfig) => {
+  const ai = getAI();
   const model = 'gemini-3-pro-image-preview';
 
   const atmosphericContext = ATMOSPHERE_ENHANCEMENT[modelConfig.modelVibe] || "";
-  
-  let postureInstruction = modelConfig.framing === 'Full Body' || modelConfig.framing === 'Upper Body' 
+
+  let postureInstruction = modelConfig.framing === 'Full Body' || modelConfig.framing === 'Upper Body'
     ? "Dynamic high-fashion pose that emphasizes the eyewear's profile. Editorial interaction with environment."
     : "Natural head tilt, direct eye contact through lenses, hair styled behind ears to show temples.";
 
@@ -98,68 +79,65 @@ export const generateEyewearImage = async (
   - Final Finish: ${modelConfig.mood}, skin texture set to ${modelConfig.skinTexture}.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: {
-        parts: [
-          { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
-          { text: DEVELOPER_PROMPT + "\n" + userPrompt }
-        ]
-      },
-      config: { 
-        systemInstruction: SYSTEM_INSTRUCTION,
-        imageConfig: { 
-          aspectRatio: modelConfig.aspectRatio, 
-          imageSize: size 
-        } 
-      }
-    });
-
-    if (response.candidates?.[0]?.content?.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+  const response = await ai.models.generateContent({
+    model: model,
+    contents: {
+      parts: [
+        { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
+        { text: DEVELOPER_PROMPT + "\n" + userPrompt }
+      ]
+    },
+    config: {
+      systemInstruction: SYSTEM_INSTRUCTION,
+      imageConfig: {
+        aspectRatio: modelConfig.aspectRatio,
+        imageSize: size
       }
     }
-    throw new Error("RENDER_FAILED");
-  } catch (error) {
-    return handleGeminiError(error);
+  });
+
+  if (response.candidates?.[0]?.content?.parts) {
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
+    }
   }
+  throw new Error("RENDER_FAILED");
 };
 
-export const generatePosterImage = async (imageBase64: string, config: PosterConfig, size: ImageSize, aspectRatio: AspectRatio = '3:4'): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const generatePosterImage = async (imageBase64, config, size, aspectRatio = '3:4') => {
+  const ai = getAI();
   const model = 'gemini-3-pro-image-preview';
-  try {
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: {
-        parts: [
-          { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
-          { text: `Create a luxury eyewear poster. Title: "${config.title}". Style: ${config.layout}. Material: ${config.material}.` }
-        ]
-      },
-      config: {
-        systemInstruction: "You are a luxury brand graphic designer. 100% product fidelity is mandatory. Ensure lens transparency is physically correct.",
-        imageConfig: { aspectRatio, imageSize: size }
-      }
-    });
-    if (response.candidates?.[0]?.content?.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+
+  const response = await ai.models.generateContent({
+    model: model,
+    contents: {
+      parts: [
+        { inlineData: { mimeType: "image/jpeg", data: imageBase64 } },
+        { text: `Create a luxury eyewear poster. Title: "${config.title}". Style: ${config.layout}. Material: ${config.material}.` }
+      ]
+    },
+    config: {
+      systemInstruction: "You are a luxury brand graphic designer. 100% product fidelity is mandatory. Ensure lens transparency is physically correct.",
+      imageConfig: { aspectRatio, imageSize: size }
+    }
+  });
+
+  if (response.candidates?.[0]?.content?.parts) {
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-    throw new Error("POSTER_FAILED");
-  } catch (error) {
-    return handleGeminiError(error);
   }
+  throw new Error("POSTER_FAILED");
 };
 
-// Fix: Implement and export getPromptSuggestions to provide AI-generated scene descriptions for the PromptEnhancer component.
-export const getPromptSuggestions = async (mode: AppMode, imageBase64?: string): Promise<string[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const parts: any[] = [];
+export const getPromptSuggestions = async (mode, imageBase64) => {
+  const ai = getAI();
+
+  const parts = [];
   if (imageBase64) {
     parts.push({
       inlineData: {
@@ -168,7 +146,7 @@ export const getPromptSuggestions = async (mode: AppMode, imageBase64?: string):
       }
     });
   }
-  
+
   parts.push({
     text: `Generate 5 creative photography scene descriptions in Chinese for a high-end eyewear commercial shoot. The application mode is ${mode}. Suggestions should be short, evocative, and suitable for a professional fashion shoot. Return as a JSON array of strings.`
   });
@@ -178,13 +156,7 @@ export const getPromptSuggestions = async (mode: AppMode, imageBase64?: string):
       model: 'gemini-3-flash-preview',
       contents: { parts },
       config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.STRING
-          }
-        }
+        responseMimeType: "application/json"
       }
     });
 
@@ -193,7 +165,6 @@ export const getPromptSuggestions = async (mode: AppMode, imageBase64?: string):
     return JSON.parse(text);
   } catch (error) {
     console.error("Prompt suggestion error:", error);
-    // Return high-quality fallbacks if the API call fails
     return [
       "极简主义水泥工作室，配合硬朗冷色调光影。",
       "自然午后暖阳，透过绿植形成的斑驳光影。",

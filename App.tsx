@@ -1,16 +1,13 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  AppMode, NavTab, ImageSize, AspectRatio, PosterConfig, 
+import { Routes, Route, useNavigate, useLocation, Link } from 'react-router-dom';
+import {
+  AppMode, NavTab, ImageSize, AspectRatio, PosterConfig,
   GeneratedImage, ModelConfig, EyewearType,
   EthnicityType, LightingType, FramingType, CommercialStyle, ModelVibe,
   CameraType, LensType, SkinTexture, MoodType, StylePreset, TemplateItem
 } from './types';
-import { 
-  generateEyewearImage, 
-  generatePosterImage, 
-  ensureApiKey 
-} from './services/geminiService';
+import { authApi, templateApi, generateApi } from './services/api';
 import { Button } from './components/Button';
 import { FeatureCard } from './components/FeatureCard';
 import { IconCamera, IconUpload, IconModel, IconCreative, IconPoster, IconGallery } from './components/Icons';
@@ -45,8 +42,9 @@ const DEFAULT_CONFIG: ModelConfig = {
 };
 
 const App: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [mode, setMode] = useState<AppMode>(AppMode.DASHBOARD);
-  const [activeTab, setActiveTab] = useState<NavTab>(NavTab.CREATE);
   const [configDepth, setConfigDepth] = useState<'basic' | 'master'>('basic');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string>('');
@@ -55,25 +53,70 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<GeneratedImage[]>([]);
   
-  // 模板系统数据
-  const [templates, setTemplates] = useState<TemplateItem[]>(() => {
-    const saved = localStorage.getItem('lyra_templates');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // 模板系统数据 - 从后端获取
+  const [templates, setTemplates] = useState<TemplateItem[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
 
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_CONFIG);
 
   // 管理员状态
+  const [adminUsername, setAdminUsername] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => authApi.isLoggedIn());
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginLoading, setLoginLoading] = useState(false);
   const [newTemplateImage, setNewTemplateImage] = useState<string | null>(null);
+
+  // 加载模板数据
+  const loadTemplates = useCallback(async () => {
+    try {
+      setTemplatesLoading(true);
+      const data = await templateApi.getAll();
+      setTemplates(data);
+    } catch (err) {
+      console.error('加载模板失败:', err);
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }, []);
+
+  // 验证登录状态
+  useEffect(() => {
+    const verifyAuth = async () => {
+      if (authApi.isLoggedIn()) {
+        const valid = await authApi.verify();
+        setIsAdminLoggedIn(valid);
+      }
+    };
+    verifyAuth();
+    loadTemplates();
+  }, [loadTemplates]);
+
+  const handleAdminLogin = async () => {
+    setLoginLoading(true);
+    setLoginError(null);
+    try {
+      await authApi.login(adminUsername, adminPassword);
+      setIsAdminLoggedIn(true);
+      setAdminUsername('');
+      setAdminPassword('');
+    } catch (err: any) {
+      setLoginError(err.message || '登录失败');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleAdminLogout = async () => {
+    try {
+      await authApi.logout();
+    } finally {
+      setIsAdminLoggedIn(false);
+    }
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const adminFileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    localStorage.setItem('lyra_templates', JSON.stringify(templates));
-  }, [templates]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
@@ -88,38 +131,51 @@ const App: React.FC = () => {
   const handleApplyTemplate = (template: TemplateItem) => {
     setModelConfig(template.config);
     if (!imageBase64) {
-      setActiveTab(NavTab.CREATE);
+      navigate('/');
       setError("请先上传您的眼镜图片");
     } else {
       setMode(AppMode.MODEL_CONFIG);
-      setActiveTab(NavTab.CREATE);
+      navigate('/');
     }
   };
 
   const handleAdminAddTemplate = async () => {
     if (!newTemplateImage) return;
-    const newTpl: TemplateItem = {
-      id: Date.now().toString(),
-      imageUrl: newTemplateImage,
-      name: "新上传模板",
-      description: "由管理员配置",
-      config: { ...modelConfig }
-    };
-    setTemplates([newTpl, ...templates]);
-    setNewTemplateImage(null);
-    alert("模板已添加至广场");
+    try {
+      const newTpl: TemplateItem = {
+        id: Date.now().toString(),
+        imageUrl: newTemplateImage,
+        name: "新上传模板",
+        description: "由管理员配置",
+        config: { ...modelConfig }
+      };
+      await templateApi.create(newTpl);
+      await loadTemplates(); // 重新加载模板列表
+      setNewTemplateImage(null);
+      alert("模板已添加至广场");
+    } catch (err: any) {
+      setError(err.message || "添加模板失败");
+    }
+  };
+
+  const handleDeleteTemplate = async (id: string) => {
+    try {
+      await templateApi.delete(id);
+      await loadTemplates(); // 重新加载模板列表
+    } catch (err: any) {
+      setError(err.message || "删除模板失败");
+    }
   };
 
   const handleRun = async () => {
     setIsGenerating(true);
     setError(null);
     try {
-      await ensureApiKey();
-      const url = await generateEyewearImage(imageBase64, '1K', modelConfig);
+      const url = await generateApi.eyewear(imageBase64, '1K', modelConfig);
       setGeneratedImage(url);
       setMode(AppMode.RESULT);
     } catch (err: any) {
-      setError("渲染失败，请检查配置。");
+      setError(err.message || "渲染失败，请检查配置。");
     } finally {
       setIsGenerating(false);
     }
@@ -206,55 +262,113 @@ const App: React.FC = () => {
     );
   };
 
-  // 渲染管理员页面
-  const renderAdmin = () => (
-    <div className="max-w-4xl mx-auto space-y-12 animate-fade-in">
-      <div className="space-y-4">
-        <h2 className="text-5xl font-serif italic text-white">管理员后台</h2>
-        <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Template & Logic Management</p>
+  // 渲染登录表单
+  const renderLoginForm = () => (
+    <div className="max-w-md mx-auto space-y-12 animate-fade-in pt-20">
+      <div className="space-y-4 text-center">
+        <div className="w-20 h-20 bg-zinc-900 rounded-3xl mx-auto flex items-center justify-center border border-white/5">
+          <IconSettings />
+        </div>
+        <h2 className="text-4xl font-serif italic text-white">管理员登录</h2>
+        <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Secure Access Required</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-        <div className="space-y-8">
-           <div 
-             onClick={() => adminFileInputRef.current?.click()}
-             className="aspect-[3/4] rounded-[2.5rem] bg-zinc-900 border border-dashed border-white/10 flex items-center justify-center cursor-pointer overflow-hidden"
-           >
-             {newTemplateImage ? (
-               <img src={newTemplateImage} className="w-full h-full object-cover" />
-             ) : (
-               <span className="text-zinc-500 font-bold uppercase tracking-widest text-[9px]">点击上传模板底图</span>
-             )}
-             <input type="file" ref={adminFileInputRef} className="hidden" onChange={async (e) => {
-               if (e.target.files?.[0]) setNewTemplateImage(`data:image/jpeg;base64,${await convertBlobToBase64(e.target.files[0])}`);
-             }} />
-           </div>
-           <Button onClick={handleAdminAddTemplate} className="w-full h-16 rounded-2xl">发布至模板广场</Button>
+      <div className="space-y-6">
+        <div className="space-y-3">
+          <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">用户名</label>
+          <input
+            type="text"
+            value={adminUsername}
+            onChange={(e) => setAdminUsername(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAdminLogin()}
+            className="w-full px-6 py-5 bg-zinc-900 border border-white/5 rounded-2xl text-white text-sm focus:outline-none focus:border-white/20 transition-colors"
+            placeholder="请输入用户名"
+          />
         </div>
-
-        <div className="space-y-8">
-           <div className="p-8 ios-card space-y-6">
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">当前模板 Prompt 参数映射</h4>
-              {renderConfig()}
-           </div>
-           <div className="space-y-4">
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">已上传列表</h4>
-              <div className="space-y-3">
-                {templates.map(t => (
-                  <div key={t.id} className="p-4 bg-zinc-900/50 rounded-xl flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <img src={t.imageUrl} className="w-10 h-10 rounded-lg object-cover" />
-                      <span className="text-xs font-bold text-zinc-300">{t.name}</span>
-                    </div>
-                    <button onClick={() => setTemplates(templates.filter(x => x.id !== t.id))} className="text-red-900 text-[10px] font-black uppercase hover:text-red-500 transition-colors">删除</button>
-                  </div>
-                ))}
-              </div>
-           </div>
+        <div className="space-y-3">
+          <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">密码</label>
+          <input
+            type="password"
+            value={adminPassword}
+            onChange={(e) => setAdminPassword(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAdminLogin()}
+            className="w-full px-6 py-5 bg-zinc-900 border border-white/5 rounded-2xl text-white text-sm focus:outline-none focus:border-white/20 transition-colors"
+            placeholder="请输入密码"
+          />
         </div>
+        {loginError && (
+          <p className="text-red-500 text-[10px] uppercase tracking-widest font-black text-center">{loginError}</p>
+        )}
+        <Button onClick={handleAdminLogin} isLoading={loginLoading} className="w-full h-16 rounded-2xl bg-white text-black font-black text-sm mt-4">
+          登录
+        </Button>
       </div>
     </div>
   );
+
+  // 渲染管理员页面
+  const renderAdmin = () => {
+    if (!isAdminLoggedIn) {
+      return renderLoginForm();
+    }
+
+    return (
+      <div className="max-w-4xl mx-auto space-y-12 animate-fade-in">
+        <div className="flex items-center justify-between">
+          <div className="space-y-4">
+            <h2 className="text-5xl font-serif italic text-white">管理员后台</h2>
+            <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Template & Logic Management</p>
+          </div>
+          <button
+            onClick={handleAdminLogout}
+            className="px-6 py-3 bg-zinc-900 border border-white/5 rounded-xl text-zinc-400 text-[10px] uppercase tracking-widest font-black hover:bg-red-900/20 hover:text-red-400 hover:border-red-900/30 transition-all"
+          >
+            退出登录
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+          <div className="space-y-8">
+             <div
+               onClick={() => adminFileInputRef.current?.click()}
+               className="aspect-[3/4] rounded-[2.5rem] bg-zinc-900 border border-dashed border-white/10 flex items-center justify-center cursor-pointer overflow-hidden"
+             >
+               {newTemplateImage ? (
+                 <img src={newTemplateImage} className="w-full h-full object-cover" />
+               ) : (
+                 <span className="text-zinc-500 font-bold uppercase tracking-widest text-[9px]">点击上传模板底图</span>
+               )}
+               <input type="file" ref={adminFileInputRef} className="hidden" onChange={async (e) => {
+                 if (e.target.files?.[0]) setNewTemplateImage(`data:image/jpeg;base64,${await convertBlobToBase64(e.target.files[0])}`);
+               }} />
+             </div>
+             <Button onClick={handleAdminAddTemplate} className="w-full h-16 rounded-2xl">发布至模板广场</Button>
+          </div>
+
+          <div className="space-y-8">
+             <div className="p-8 ios-card space-y-6">
+                <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">当前模板 Prompt 参数映射</h4>
+                {renderConfig()}
+             </div>
+             <div className="space-y-4">
+                <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">已上传列表</h4>
+                <div className="space-y-3">
+                  {templates.map(t => (
+                    <div key={t.id} className="p-4 bg-zinc-900/50 rounded-xl flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <img src={t.imageUrl} className="w-10 h-10 rounded-lg object-cover" />
+                        <span className="text-xs font-bold text-zinc-300">{t.name}</span>
+                      </div>
+                      <button onClick={() => handleDeleteTemplate(t.id)} className="text-red-900 text-[10px] font-black uppercase hover:text-red-500 transition-colors">删除</button>
+                    </div>
+                  ))}
+                </div>
+             </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-black text-zinc-100 flex flex-col lg:flex-row font-sans overflow-x-hidden">
@@ -265,11 +379,11 @@ const App: React.FC = () => {
           <span className="font-black text-2xl font-serif italic text-white">Lyra</span>
         </div>
         <nav className="flex-1 px-8 py-4 space-y-2">
-          <NavItem active={activeTab === NavTab.CREATE} onClick={() => { setActiveTab(NavTab.CREATE); setMode(AppMode.DASHBOARD); }} icon={<IconCreative />} label="创作工坊" />
-          <NavItem active={activeTab === NavTab.TEMPLATES} onClick={() => { setActiveTab(NavTab.TEMPLATES); setMode(AppMode.MODEL_SHOT); }} icon={<IconPoster />} label="模板广场" />
-          <NavItem active={activeTab === NavTab.GALLERY} onClick={() => setActiveTab(NavTab.GALLERY)} icon={<IconGallery />} label="作品集" />
+          <NavItem active={location.pathname === '/'} onClick={() => { navigate('/'); setMode(AppMode.DASHBOARD); }} icon={<IconCreative />} label="创作工坊" />
+          <NavItem active={location.pathname === '/templates'} onClick={() => navigate('/templates')} icon={<IconPoster />} label="模板广场" />
+          <NavItem active={location.pathname === '/gallery'} onClick={() => navigate('/gallery')} icon={<IconGallery />} label="作品集" />
           <div className="pt-20">
-             <NavItem active={activeTab === NavTab.ADMIN} onClick={() => { setActiveTab(NavTab.ADMIN); setMode(AppMode.ADMIN); }} icon={<IconSettings />} label="后台管理" />
+             <NavItem active={location.pathname === '/admin'} onClick={() => navigate('/admin')} icon={<IconSettings />} label="后台管理" />
           </div>
         </nav>
       </aside>
@@ -277,11 +391,21 @@ const App: React.FC = () => {
       {/* 主内容区 */}
       <main className="flex-1 flex flex-col min-h-screen">
         <div className="container mx-auto px-6 py-12 lg:px-20 lg:py-20">
-          
-          {activeTab === NavTab.TEMPLATES && renderTemplateGallery()}
-          {activeTab === NavTab.ADMIN && renderAdmin()}
-
-          {activeTab === NavTab.CREATE && (
+          <Routes>
+            <Route path="/templates" element={renderTemplateGallery()} />
+            <Route path="/admin" element={renderAdmin()} />
+            <Route path="/gallery" element={
+              <div className="space-y-12 animate-fade-in pb-20">
+                <div className="space-y-4 text-center max-w-xl mx-auto">
+                  <h2 className="text-5xl font-serif italic text-white">作品集</h2>
+                  <p className="text-zinc-500 text-xs uppercase tracking-[0.3em] font-black">Your Creative Gallery</p>
+                </div>
+                <div className="ios-card p-16 text-center">
+                  <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">暂无作品，开始创作吧</p>
+                </div>
+              </div>
+            } />
+            <Route path="/" element={
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-16">
               <div className="xl:col-span-7">
                 <div className="aspect-[3/4] rounded-[3.5rem] overflow-hidden border border-white/5 bg-[#080808] flex items-center justify-center relative shadow-2xl">
@@ -317,7 +441,7 @@ const App: React.FC = () => {
                     <h2 className="text-6xl font-black italic font-serif text-white">开始创作</h2>
                     <div className="grid gap-6">
                        <FeatureCard title="商业模特试戴" description="一键配置模特属性，支持物理光影锁定与折射追踪。" icon={<IconModel />} onClick={() => setMode(AppMode.MODEL_CONFIG)} />
-                       <FeatureCard title="从模板生成" description="套用高质量大师模板，一键获得品牌级视觉效果。" icon={<IconPoster />} onClick={() => setActiveTab(NavTab.TEMPLATES)} />
+                       <FeatureCard title="从模板生成" description="套用高质量大师模板，一键获得品牌级视觉效果。" icon={<IconPoster />} onClick={() => navigate('/templates')} />
                     </div>
                   </div>
                 )}
@@ -338,7 +462,8 @@ const App: React.FC = () => {
                 )}
               </div>
             </div>
-          )}
+            } />
+          </Routes>
         </div>
       </main>
 

@@ -72,7 +72,7 @@ export interface PosterConfig {
 }
 
 export interface ModelConfig {
-  eyewearType: EyewearType; 
+  eyewearType: EyewearType;
   visualPurpose: CommercialStyle;
   modelVibe: ModelVibe;
   ethnicity: EthnicityType;
@@ -86,11 +86,4 @@ export interface ModelConfig {
   lighting: LightingType;
   mood: MoodType;
   aspectRatio: AspectRatio;
-}
-
-declare global {
-  interface AIStudio {
-    hasSelectedApiKey: () => Promise<boolean>;
-    openSelectKey: () => Promise<void>;
-  }
 }
