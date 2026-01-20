@@ -1,16 +1,17 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Routes, Route, useNavigate, useLocation, Link } from 'react-router-dom';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import {
   AppMode, NavTab, ImageSize, AspectRatio, PosterConfig,
   GeneratedImage, ModelConfig, EyewearType,
   EthnicityType, LightingType, FramingType, CommercialStyle, ModelVibe,
-  CameraType, LensType, SkinTexture, MoodType, StylePreset, TemplateItem
+  CameraType, LensType, SkinTexture, MoodType, StylePreset, TemplateItem, User
 } from './types';
-import { authApi, templateApi, generateApi } from './services/api';
+import { authApi, templateApi, generateApi, userApi } from './services/api';
 import { Button } from './components/Button';
 import { FeatureCard } from './components/FeatureCard';
 import { IconCamera, IconUpload, IconModel, IconCreative, IconPoster, IconGallery } from './components/Icons';
+import { AuthPage } from './components/AuthPage';
 
 const convertBlobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -59,13 +60,29 @@ const App: React.FC = () => {
 
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_CONFIG);
 
-  // 管理员状态
+  // 用户认证状态
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthChecked, setIsAuthChecked] = useState(false);
+
+  // 管理员表单状态
   const [adminUsername, setAdminUsername] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => authApi.isLoggedIn());
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [newTemplateImage, setNewTemplateImage] = useState<string | null>(null);
+
+  // 用户历史记录
+  const [userHistory, setUserHistory] = useState<GeneratedImage[]>([]);
+
+  // 修改密码状态
+  const [passwordChangeState, setPasswordChangeState] = useState({
+    oldPassword: '',
+    newPassword: '',
+    confirmPassword: '',
+    loading: false,
+    error: null as string | null,
+    success: false
+  });
 
   // 加载模板数据
   const loadTemplates = useCallback(async () => {
@@ -80,24 +97,68 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // 加载用户历史记录
+  const loadUserHistory = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const images = await userApi.getHistory();
+      setUserHistory(images);
+    } catch (err) {
+      console.error('加载历史记录失败:', err);
+    }
+  }, [currentUser]);
+
   // 验证登录状态
   useEffect(() => {
     const verifyAuth = async () => {
       if (authApi.isLoggedIn()) {
-        const valid = await authApi.verify();
-        setIsAdminLoggedIn(valid);
+        const user = await authApi.verify();
+        setCurrentUser(user);
       }
+      setIsAuthChecked(true);
     };
     verifyAuth();
     loadTemplates();
   }, [loadTemplates]);
 
+  // 当用户登录后加载历史记录
+  useEffect(() => {
+    if (currentUser) {
+      loadUserHistory();
+    }
+  }, [currentUser, loadUserHistory]);
+
+  // 普通用户登录
+  const handleUserLogin = async (username: string, password: string): Promise<User> => {
+    const result = await authApi.login(username, password);
+    setCurrentUser(result.user);
+    return result.user;
+  };
+
+  // 普通用户注册
+  const handleUserRegister = async (username: string, password: string): Promise<User> => {
+    const result = await authApi.register(username, password);
+    setCurrentUser(result.user);
+    return result.user;
+  };
+
+  // 用户登出
+  const handleUserLogout = async () => {
+    try {
+      await authApi.logout();
+    } finally {
+      setCurrentUser(null);
+      setUserHistory([]);
+    }
+  };
+
+  // 管理员表单登录（后台管理页专用）
   const handleAdminLogin = async () => {
     setLoginLoading(true);
     setLoginError(null);
     try {
-      await authApi.login(adminUsername, adminPassword);
-      setIsAdminLoggedIn(true);
+      const result = await authApi.login(adminUsername, adminPassword);
+      setCurrentUser(result.user);
       setAdminUsername('');
       setAdminPassword('');
     } catch (err: any) {
@@ -108,10 +169,44 @@ const App: React.FC = () => {
   };
 
   const handleAdminLogout = async () => {
+    await handleUserLogout();
+  };
+
+  // 修改密码
+  const handleChangePassword = async () => {
+    const { oldPassword, newPassword, confirmPassword } = passwordChangeState;
+
+    if (!oldPassword || !newPassword || !confirmPassword) {
+      setPasswordChangeState(s => ({ ...s, error: '请填写所有字段' }));
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordChangeState(s => ({ ...s, error: '两次输入的新密码不一致' }));
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setPasswordChangeState(s => ({ ...s, error: '新密码长度至少6位' }));
+      return;
+    }
+
+    setPasswordChangeState(s => ({ ...s, loading: true, error: null }));
     try {
-      await authApi.logout();
-    } finally {
-      setIsAdminLoggedIn(false);
+      await authApi.changePassword(oldPassword, newPassword);
+      setPasswordChangeState({
+        oldPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+        loading: false,
+        error: null,
+        success: true
+      });
+      setTimeout(() => {
+        setPasswordChangeState(s => ({ ...s, success: false }));
+      }, 3000);
+    } catch (err: any) {
+      setPasswordChangeState(s => ({ ...s, loading: false, error: err.message || '密码修改失败' }));
     }
   };
 
@@ -168,13 +263,26 @@ const App: React.FC = () => {
   };
 
   const handleRun = async () => {
+    // 检查登录状态
+    if (!currentUser) {
+      setError('请先登录后再生成图片');
+      navigate('/login');
+      return;
+    }
+
     setIsGenerating(true);
     setError(null);
     try {
       const url = await generateApi.eyewear(imageBase64, '1K', modelConfig);
       setGeneratedImage(url);
       setMode(AppMode.RESULT);
+      // 刷新历史记录
+      loadUserHistory();
     } catch (err: any) {
+      if (err.message?.includes('未授权') || err.message?.includes('过期')) {
+        setCurrentUser(null);
+        navigate('/login');
+      }
       setError(err.message || "渲染失败，请检查配置。");
     } finally {
       setIsGenerating(false);
@@ -255,8 +363,13 @@ const App: React.FC = () => {
           )}
 
           <Button onClick={handleRun} className={`w-full h-24 rounded-[2.5rem] font-black text-[12px] shadow-2xl transition-all duration-500 ${configDepth === 'master' ? 'bg-blue-600 text-white' : 'bg-white text-black'}`} isLoading={isGenerating}>
-            {configDepth === 'master' ? '执行大师级渲染' : '即刻生成大片'}
+            {!currentUser ? '登录后生成' : configDepth === 'master' ? '执行大师级渲染' : '即刻生成大片'}
           </Button>
+          {!currentUser && (
+            <p className="text-center text-zinc-600 text-[10px] uppercase tracking-widest font-black mt-4">
+              需要登录才能生成图片
+            </p>
+          )}
         </div>
       </div>
     );
@@ -308,7 +421,8 @@ const App: React.FC = () => {
 
   // 渲染管理员页面
   const renderAdmin = () => {
-    if (!isAdminLoggedIn) {
+    // 需要管理员权限
+    if (!currentUser || currentUser.role !== 'admin') {
       return renderLoginForm();
     }
 
@@ -382,16 +496,150 @@ const App: React.FC = () => {
           <NavItem active={location.pathname === '/'} onClick={() => { navigate('/'); setMode(AppMode.DASHBOARD); }} icon={<IconCreative />} label="创作工坊" />
           <NavItem active={location.pathname === '/templates'} onClick={() => navigate('/templates')} icon={<IconPoster />} label="模板广场" />
           <NavItem active={location.pathname === '/gallery'} onClick={() => navigate('/gallery')} icon={<IconGallery />} label="作品集" />
-          <div className="pt-20">
-             <NavItem active={location.pathname === '/admin'} onClick={() => navigate('/admin')} icon={<IconSettings />} label="后台管理" />
-          </div>
+          {currentUser?.role === 'admin' && (
+            <div className="pt-20">
+               <NavItem active={location.pathname === '/admin'} onClick={() => navigate('/admin')} icon={<IconSettings />} label="后台管理" />
+            </div>
+          )}
         </nav>
+        {/* 用户状态区 */}
+        <div className="p-8 border-t border-white/5">
+          {currentUser ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-zinc-800 rounded-xl flex items-center justify-center">
+                  <span className="text-white font-bold text-sm">{currentUser.username.charAt(0).toUpperCase()}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-white text-sm font-bold truncate">{currentUser.username}</p>
+                  <p className="text-zinc-600 text-[9px] uppercase tracking-widest font-black">
+                    {currentUser.role === 'admin' ? 'Admin' : 'Member'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => navigate('/settings')}
+                  className="flex-1 px-4 py-3 bg-zinc-900 border border-white/5 rounded-xl text-zinc-500 text-[10px] uppercase tracking-widest font-black hover:bg-zinc-800 hover:text-white transition-all"
+                >
+                  设置
+                </button>
+                <button
+                  onClick={handleUserLogout}
+                  className="flex-1 px-4 py-3 bg-zinc-900 border border-white/5 rounded-xl text-zinc-500 text-[10px] uppercase tracking-widest font-black hover:bg-red-900/20 hover:text-red-400 transition-all"
+                >
+                  退出
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => navigate('/login')}
+              className="w-full px-4 py-4 bg-white text-black rounded-xl text-[10px] uppercase tracking-widest font-black hover:bg-zinc-200 transition-all"
+            >
+              登录 / 注册
+            </button>
+          )}
+        </div>
       </aside>
 
       {/* 主内容区 */}
       <main className="flex-1 flex flex-col min-h-screen">
         <div className="container mx-auto px-6 py-12 lg:px-20 lg:py-20">
           <Routes>
+            <Route path="/login" element={
+              <AuthPage
+                onSuccess={(user) => {
+                  setCurrentUser(user);
+                  navigate('/');
+                }}
+                onLogin={handleUserLogin}
+                onRegister={handleUserRegister}
+              />
+            } />
+            <Route path="/settings" element={
+              !currentUser ? (
+                <div className="text-center py-20">
+                  <p className="text-zinc-400 mb-6">请先登录</p>
+                  <Button onClick={() => navigate('/login')} className="mx-auto rounded-2xl">
+                    去登录
+                  </Button>
+                </div>
+              ) : (
+                <div className="max-w-md mx-auto space-y-12 animate-fade-in">
+                  <div className="space-y-4 text-center">
+                    <h2 className="text-4xl font-serif italic text-white">账户设置</h2>
+                    <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Account Settings</p>
+                  </div>
+
+                  <div className="ios-card p-8 space-y-8">
+                    <div className="space-y-2">
+                      <h3 className="text-[11px] text-white uppercase tracking-widest font-black">修改密码</h3>
+                      <p className="text-zinc-600 text-[10px]">定期更换密码有助于保护账户安全</p>
+                    </div>
+
+                    {currentUser.role === 'admin' && !currentUser.id ? (
+                      <p className="text-zinc-500 text-[10px] uppercase tracking-widest font-black py-4">
+                        管理员账户请通过环境变量修改密码
+                      </p>
+                    ) : (
+                      <div className="space-y-6">
+                        <div className="space-y-3">
+                          <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">当前密码</label>
+                          <input
+                            type="password"
+                            value={passwordChangeState.oldPassword}
+                            onChange={(e) => setPasswordChangeState(s => ({ ...s, oldPassword: e.target.value, error: null }))}
+                            className="w-full px-5 py-4 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20 transition-colors"
+                            placeholder="请输入当前密码"
+                          />
+                        </div>
+                        <div className="space-y-3">
+                          <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">新密码</label>
+                          <input
+                            type="password"
+                            value={passwordChangeState.newPassword}
+                            onChange={(e) => setPasswordChangeState(s => ({ ...s, newPassword: e.target.value, error: null }))}
+                            className="w-full px-5 py-4 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20 transition-colors"
+                            placeholder="请输入新密码（至少6位）"
+                          />
+                        </div>
+                        <div className="space-y-3">
+                          <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">确认新密码</label>
+                          <input
+                            type="password"
+                            value={passwordChangeState.confirmPassword}
+                            onChange={(e) => setPasswordChangeState(s => ({ ...s, confirmPassword: e.target.value, error: null }))}
+                            className="w-full px-5 py-4 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20 transition-colors"
+                            placeholder="请再次输入新密码"
+                          />
+                        </div>
+
+                        {passwordChangeState.error && (
+                          <p className="text-red-500 text-[10px] uppercase tracking-widest font-black text-center">
+                            {passwordChangeState.error}
+                          </p>
+                        )}
+
+                        {passwordChangeState.success && (
+                          <p className="text-green-500 text-[10px] uppercase tracking-widest font-black text-center">
+                            密码修改成功
+                          </p>
+                        )}
+
+                        <Button
+                          onClick={handleChangePassword}
+                          isLoading={passwordChangeState.loading}
+                          className="w-full h-14 rounded-xl"
+                        >
+                          确认修改
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            } />
             <Route path="/templates" element={renderTemplateGallery()} />
             <Route path="/admin" element={renderAdmin()} />
             <Route path="/gallery" element={
@@ -400,9 +648,31 @@ const App: React.FC = () => {
                   <h2 className="text-5xl font-serif italic text-white">作品集</h2>
                   <p className="text-zinc-500 text-xs uppercase tracking-[0.3em] font-black">Your Creative Gallery</p>
                 </div>
-                <div className="ios-card p-16 text-center">
-                  <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">暂无作品，开始创作吧</p>
-                </div>
+                {!currentUser ? (
+                  <div className="ios-card p-16 text-center space-y-6">
+                    <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">登录后查看您的作品</p>
+                    <Button onClick={() => navigate('/login')} className="mx-auto rounded-2xl">
+                      立即登录
+                    </Button>
+                  </div>
+                ) : userHistory.length === 0 ? (
+                  <div className="ios-card p-16 text-center">
+                    <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">暂无作品，开始创作吧</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+                    {userHistory.map(img => (
+                      <div key={img.id} className="group relative aspect-[3/4] rounded-[2rem] overflow-hidden border border-white/5 hover:border-white/20 transition-all duration-500">
+                        <img src={img.url} className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                        <div className="absolute bottom-6 left-6 right-6 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-black">{img.type}</p>
+                          <p className="text-[9px] text-zinc-600 mt-1">{new Date(img.timestamp).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             } />
             <Route path="/" element={

@@ -150,6 +150,11 @@ export const userDb = {
   usernameExists: (username) => {
     const row = db.prepare('SELECT 1 FROM users WHERE username = ?').get(username);
     return !!row;
+  },
+
+  updatePassword: (userId, passwordHash) => {
+    const stmt = db.prepare('UPDATE users SET password_hash = ? WHERE id = ?');
+    return stmt.run(passwordHash, userId).changes > 0;
   }
 };
 

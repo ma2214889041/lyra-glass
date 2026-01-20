@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import { templateDb, sessionDb, imageDb } from './db.js';
-import { login, logout, register, authMiddleware, adminMiddleware } from './auth.js';
+import { login, logout, register, changePassword, authMiddleware, adminMiddleware } from './auth.js';
 import { generateEyewearImage, generatePosterImage, getPromptSuggestions } from './gemini.js';
 
 const app = express();
@@ -92,6 +92,32 @@ app.get('/api/auth/verify', authMiddleware, (req, res) => {
       role: req.user.role
     }
   });
+});
+
+// 修改密码
+app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: '请提供当前密码和新密码' });
+    }
+
+    // 管理员账户不支持修改密码（通过环境变量配置）
+    if (req.user.role === 'admin' && !req.user.userId) {
+      return res.status(400).json({ error: '管理员账户请通过环境变量修改密码' });
+    }
+
+    const result = await changePassword(req.user.userId, oldPassword, newPassword);
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json({ success: true, message: '密码修改成功' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ error: '密码修改失败，请稍后重试' });
+  }
 });
 
 // ========== 模板 API ==========

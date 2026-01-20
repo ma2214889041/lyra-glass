@@ -1,4 +1,4 @@
-import { ModelConfig, PosterConfig, TemplateItem, ImageSize, AspectRatio, AppMode } from '../types';
+import { ModelConfig, PosterConfig, TemplateItem, ImageSize, AspectRatio, AppMode, User, GeneratedImage } from '../types';
 
 const API_BASE = '/api';
 
@@ -38,9 +38,28 @@ const request = async <T>(
 
 // ========== 认证 API ==========
 
+interface AuthResponse {
+  success: boolean;
+  token: string;
+  user: User;
+  expiresAt: number;
+}
+
 export const authApi = {
-  login: async (username: string, password: string): Promise<{ token: string; expiresAt: number }> => {
-    const result = await request<{ success: boolean; token: string; expiresAt: number }>(
+  register: async (username: string, password: string): Promise<{ token: string; user: User; expiresAt: number }> => {
+    const result = await request<AuthResponse>(
+      '/auth/register',
+      {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      }
+    );
+    setToken(result.token);
+    return result;
+  },
+
+  login: async (username: string, password: string): Promise<{ token: string; user: User; expiresAt: number }> => {
+    const result = await request<AuthResponse>(
       '/auth/login',
       {
         method: 'POST',
@@ -59,17 +78,26 @@ export const authApi = {
     }
   },
 
-  verify: async (): Promise<boolean> => {
+  verify: async (): Promise<User | null> => {
     try {
-      await request('/auth/verify');
-      return true;
+      const result = await request<{ success: boolean; user: User }>('/auth/verify');
+      return result.user;
     } catch {
       removeToken();
-      return false;
+      return null;
     }
   },
 
   isLoggedIn: (): boolean => !!getToken(),
+
+  getToken,
+
+  changePassword: async (oldPassword: string, newPassword: string): Promise<void> => {
+    await request('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ oldPassword, newPassword }),
+    });
+  },
 };
 
 // ========== 模板 API ==========
@@ -145,6 +173,15 @@ export const generateApi = {
       }
     );
     return result.suggestions;
+  },
+};
+
+// ========== 用户数据 API ==========
+
+export const userApi = {
+  getHistory: async (): Promise<GeneratedImage[]> => {
+    const result = await request<{ success: boolean; images: GeneratedImage[] }>('/user/history');
+    return result.images;
   },
 };
 

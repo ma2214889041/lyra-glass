@@ -1,3 +1,14 @@
+export interface User {
+  id: number | null;
+  username: string;
+  role: 'user' | 'admin';
+}
+
+export interface AuthState {
+  isLoggedIn: boolean;
+  user: User | null;
+  token: string | null;
+}
 
 export enum AppMode {
   DASHBOARD = 'DASHBOARD',

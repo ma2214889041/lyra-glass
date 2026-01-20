@@ -120,6 +120,35 @@ export const login = async (username, password) => {
   return null;
 };
 
+// 修改密码
+export const changePassword = async (userId, oldPassword, newPassword) => {
+  // 获取用户
+  const user = userDb.findByUsername(userDb.findById(userId)?.username);
+  if (!user) {
+    return { error: '用户不存在' };
+  }
+
+  // 验证旧密码
+  const isValid = await verifyPassword(oldPassword, user.password_hash);
+  if (!isValid) {
+    return { error: '当前密码错误' };
+  }
+
+  // 验证新密码
+  if (newPassword.length < 6) {
+    return { error: '新密码长度至少6位' };
+  }
+
+  // 更新密码
+  const newHash = await hashPassword(newPassword);
+  const updated = userDb.updatePassword(userId, newHash);
+  if (!updated) {
+    return { error: '密码更新失败' };
+  }
+
+  return { success: true };
+};
+
 // 登出
 export const logout = (token) => {
   return sessionDb.delete(token);

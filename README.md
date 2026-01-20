@@ -1,20 +1,167 @@
 <div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+  <img src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" alt="Lyra Banner" width="100%" />
+  
+  # Lyra 眼镜摄影工坊 👓✨
+  
+  **AI驱动的商业级眼镜产品图生成工具**
+  
+  基于 Google Gemini AI 的智能眼镜试戴效果生成平台，一键生成品牌大片级商业视觉
+  
+  [在线演示](https://ai.studio/apps/drive/1oB-oE1q7S5wIHA0YcN285SyxWZWUSj-6) · [问题反馈](https://github.com/ma2214889041/lyra-glass/issues)
+  
 </div>
 
-# Run and deploy your AI Studio app
+---
 
-This contains everything you need to run your app locally.
+## ✨ 功能特性
 
-View your app in AI Studio: https://ai.studio/apps/drive/1oB-oE1q7S5wIHA0YcN285SyxWZWUSj-6
+- 🎯 **智能模特试戴** - 上传眼镜图片，AI自动生成专业模特佩戴效果
+- 🎨 **丰富配置选项** - 支持族裔、年龄、性别、景别、灯光等多维度定制
+- 📷 **专业摄影参数** - Hasselblad、Sony、Leica 等顶级相机模拟
+- 💡 **大师级灯光** - Softbox、蝴蝶光、伦勃朗、霓虹暗黑等多种灯光方案
+- 🖼️ **模板广场** - 一键套用预设风格模板，快速出图
+- 👨‍💼 **管理后台** - 支持模板上传、管理等运营功能
 
-## Run Locally
+## 🛠️ 技术栈
 
-**Prerequisites:**  Node.js
+### 前端
+- **React 19** + **TypeScript** - 现代化前端框架
+- **Vite 6** - 极速开发构建工具
+- **React Router 7** - 客户端路由
 
+### 后端
+- **Node.js** + **Express** - 轻量级服务端
+- **SQLite** (better-sqlite3) - 本地数据库
+- **Google Gemini AI** - AI图像生成引擎
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## 📁 项目结构
+
+```
+lyra-glass/
+├── App.tsx              # 主应用组件
+├── index.tsx            # React 入口
+├── index.html           # HTML 模板
+├── components/          # UI 组件
+│   ├── Button.tsx
+│   ├── FeatureCard.tsx
+│   ├── Icons.tsx
+│   └── ...
+├── services/            # 前端服务层
+│   └── api.ts           # API 调用封装
+├── types.ts             # TypeScript 类型定义
+├── vite.config.ts       # Vite 配置
+└── server/              # 后端服务
+    ├── index.js         # Express 主程序
+    ├── gemini.js        # Gemini AI 调用
+    ├── auth.js          # 用户认证
+    ├── db.js            # 数据库操作
+    └── .env.example     # 环境变量示例
+```
+
+## 🚀 快速开始
+
+### 环境要求
+
+- Node.js 18+
+- npm 或 yarn
+
+### 安装步骤
+
+1. **克隆仓库**
+   ```bash
+   git clone https://github.com/ma2214889041/lyra-glass.git
+   cd lyra-glass
+   ```
+
+2. **安装前端依赖**
+   ```bash
+   npm install
+   ```
+
+3. **安装后端依赖**
+   ```bash
+   npm run server:install
+   # 或者
+   cd server && npm install
+   ```
+
+4. **配置环境变量**
+   
+   复制后端环境变量文件并填入你的配置：
+   ```bash
+   cp server/.env.example server/.env
+   ```
+   
+   编辑 `server/.env` 文件：
+   ```env
+   # Gemini API Key (从 Google AI Studio 获取)
+   GEMINI_API_KEY=your_gemini_api_key_here
+   
+   # 管理员凭据
+   ADMIN_USERNAME=your_admin_username
+   ADMIN_PASSWORD=your_admin_password
+   
+   # 服务器端口
+   PORT=3001
+   
+   # JWT 密钥
+   JWT_SECRET=your_jwt_secret_here
+   ```
+
+5. **启动应用**
+   ```bash
+   # 同时启动前端和后端
+   npm run dev:all
+   ```
+
+6. **访问应用**
+   
+   打开浏览器访问 `http://localhost:3001`
+
+### 可用脚本
+
+| 命令 | 说明 |
+|------|------|
+| `npm run dev` | 仅启动前端开发服务器 |
+| `npm run dev:server` | 仅启动后端服务器 |
+| `npm run dev:all` | 同时启动前端和后端 |
+| `npm run build` | 构建生产版本 |
+| `npm run preview` | 预览生产构建 |
+
+## 🔑 获取 Gemini API Key
+
+1. 访问 [Google AI Studio](https://aistudio.google.com/)
+2. 登录你的 Google 账号
+3. 点击 "Get API Key" 获取免费 API 密钥
+4. 将密钥填入 `server/.env` 文件
+
+## 📝 使用说明
+
+### 基础使用流程
+
+1. **上传眼镜图片** - 在首页点击上传按钮，选择眼镜产品图 (PNG/JPG)
+2. **选择生成模式** - 选择「商业模特试戴」或「从模板生成」
+3. **配置参数** - 选择模特族裔、年龄、性别、商业用途、景别等
+4. **开始生成** - 点击生成按钮，等待 AI 渲染完成
+5. **导出图片** - 下载生成的商业级效果图
+
+### 管理后台
+
+访问 `/admin` 路径，使用管理员账号登录后可以：
+- 上传新的风格模板
+- 管理已有模板
+- 配置模板参数
+
+## 📄 开源协议
+
+MIT License
+
+## 🤝 贡献
+
+欢迎提交 Issues 和 Pull Requests！
+
+---
+
+<div align="center">
+  <sub>Made with ❤️ by Lyra Team</sub>
+</div>
