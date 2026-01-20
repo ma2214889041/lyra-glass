@@ -14,9 +14,18 @@ db.exec(`
     name TEXT NOT NULL,
     description TEXT,
     image_url TEXT NOT NULL,
-    config TEXT NOT NULL,
+    prompt TEXT NOT NULL DEFAULT '',
+    tags TEXT DEFAULT '[]',
+    variables TEXT DEFAULT '[]',
     created_at INTEGER DEFAULT (strftime('%s', 'now')),
     updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    color TEXT DEFAULT '#6366f1',
+    created_at INTEGER DEFAULT (strftime('%s', 'now'))
   );
 
   CREATE TABLE IF NOT EXISTS users (
@@ -56,22 +65,78 @@ try {
 }
 try {
   db.exec(`ALTER TABLE sessions ADD COLUMN user_id INTEGER`);
-} catch (e) {}
+} catch (e) { }
 try {
   db.exec(`ALTER TABLE sessions ADD COLUMN role TEXT DEFAULT 'user'`);
-} catch (e) {}
+} catch (e) { }
+try {
+  db.exec(`ALTER TABLE templates ADD COLUMN prompt TEXT NOT NULL DEFAULT ''`);
+} catch (e) { }
+try {
+  db.exec(`ALTER TABLE templates ADD COLUMN tags TEXT DEFAULT '[]'`);
+} catch (e) { }
+try {
+  db.exec(`ALTER TABLE templates ADD COLUMN variables TEXT DEFAULT '[]'`);
+} catch (e) { }
+
+// 插入默认标签（如果不存在）
+const defaultTags = [
+  { id: 'model', name: '模特试戴', color: '#6366f1' },
+  { id: 'poster', name: '海报', color: '#ec4899' },
+  { id: 'social', name: '社媒', color: '#14b8a6' },
+  { id: 'ecommerce', name: '电商', color: '#f59e0b' }
+];
+defaultTags.forEach(tag => {
+  try {
+    db.prepare('INSERT OR IGNORE INTO tags (id, name, color) VALUES (?, ?, ?)').run(tag.id, tag.name, tag.color);
+  } catch (e) { }
+});
+
+// 标签相关操作
+export const tagDb = {
+  getAll: () => {
+    return db.prepare('SELECT * FROM tags ORDER BY created_at ASC').all();
+  },
+
+  create: (tag) => {
+    const id = tag.id || Date.now().toString();
+    const stmt = db.prepare('INSERT INTO tags (id, name, color) VALUES (?, ?, ?)');
+    stmt.run(id, tag.name, tag.color || '#6366f1');
+    return { id, ...tag };
+  },
+
+  update: (id, updates) => {
+    const stmt = db.prepare('UPDATE tags SET name = ?, color = ? WHERE id = ?');
+    const result = stmt.run(updates.name, updates.color, id);
+    if (result.changes === 0) return null;
+    return { id, ...updates };
+  },
+
+  delete: (id) => {
+    const stmt = db.prepare('DELETE FROM tags WHERE id = ?');
+    return stmt.run(id).changes > 0;
+  }
+};
 
 // 模板相关操作
 export const templateDb = {
-  getAll: () => {
+  getAll: (tagFilter = null) => {
     const rows = db.prepare('SELECT * FROM templates ORDER BY created_at DESC').all();
-    return rows.map(row => ({
+    let results = rows.map(row => ({
       id: row.id,
       name: row.name,
       description: row.description,
       imageUrl: row.image_url,
-      config: JSON.parse(row.config)
+      prompt: row.prompt || '',
+      tags: JSON.parse(row.tags || '[]'),
+      variables: JSON.parse(row.variables || '[]')
     }));
+
+    // 如果有标签筛选，只返回包含该标签的模板
+    if (tagFilter) {
+      results = results.filter(tpl => tpl.tags.includes(tagFilter));
+    }
+    return results;
   },
 
   getById: (id) => {
@@ -82,21 +147,25 @@ export const templateDb = {
       name: row.name,
       description: row.description,
       imageUrl: row.image_url,
-      config: JSON.parse(row.config)
+      prompt: row.prompt || '',
+      tags: JSON.parse(row.tags || '[]'),
+      variables: JSON.parse(row.variables || '[]')
     };
   },
 
   create: (template) => {
     const stmt = db.prepare(`
-      INSERT INTO templates (id, name, description, image_url, config)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO templates (id, name, description, image_url, prompt, tags, variables)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       template.id,
       template.name,
       template.description,
       template.imageUrl,
-      JSON.stringify(template.config)
+      template.prompt || '',
+      JSON.stringify(template.tags || []),
+      JSON.stringify(template.variables || [])
     );
     return template;
   },
@@ -108,14 +177,16 @@ export const templateDb = {
     const updated = { ...current, ...updates };
     const stmt = db.prepare(`
       UPDATE templates
-      SET name = ?, description = ?, image_url = ?, config = ?, updated_at = strftime('%s', 'now')
+      SET name = ?, description = ?, image_url = ?, prompt = ?, tags = ?, variables = ?, updated_at = strftime('%s', 'now')
       WHERE id = ?
     `);
     stmt.run(
       updated.name,
       updated.description,
       updated.imageUrl,
-      JSON.stringify(updated.config),
+      updated.prompt || '',
+      JSON.stringify(updated.tags || []),
+      JSON.stringify(updated.variables || []),
       id
     );
     return updated;
@@ -127,6 +198,7 @@ export const templateDb = {
     return result.changes > 0;
   }
 };
+
 
 // 用户相关操作
 export const userDb = {

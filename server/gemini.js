@@ -174,3 +174,89 @@ export const getPromptSuggestions = async (mode, imageBase64) => {
     ];
   }
 };
+
+// 使用模板提示词生成图片
+export const generateFromTemplate = async (eyewearImageBase64, templatePrompt, aspectRatio = '3:4') => {
+  const ai = getAI();
+  const model = 'gemini-3-pro-image-preview';
+
+  const fullPrompt = `
+${SYSTEM_INSTRUCTION}
+
+${DEVELOPER_PROMPT}
+
+[TEMPLATE-BASED GENERATION]
+使用以下提示词，结合上传的眼镜产品图，生成商业级模特试戴效果图：
+
+${templatePrompt}
+
+[REQUIREMENTS]
+- 眼镜必须100%保真还原参考图中的样式
+- 镜片透明度和折射效果必须物理正确
+- 输出应该是高质量商业摄影效果
+`;
+
+  const response = await ai.models.generateContent({
+    model: model,
+    contents: {
+      parts: [
+        { inlineData: { mimeType: "image/jpeg", data: eyewearImageBase64 } },
+        { text: fullPrompt }
+      ]
+    },
+    config: {
+      imageConfig: {
+        aspectRatio: aspectRatio,
+        imageSize: '1K'
+      }
+    }
+  });
+
+  if (response.candidates?.[0]?.content?.parts) {
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
+    }
+  }
+  throw new Error("TEMPLATE_RENDER_FAILED");
+};
+
+// 使用 Gemini Flash 优化提示词（管理员专用）
+export const optimizePrompt = async (rawPrompt) => {
+  const ai = getAI();
+  const model = 'gemini-2.0-flash';  // 使用 Flash 模型进行文本处理
+
+  const systemPrompt = `你是一位专业的商业摄影和 AI 提示词优化专家。你的任务是优化用户提供的提示词，使其更适合生成高质量的眼镜产品试戴效果图。
+
+优化原则：
+1. **眼镜还原度**：强调眼镜的精确还原，包括镜框形状、材质、颜色、镜片透明度
+2. **专业摄影术语**：添加合适的光线、构图、景深等摄影参数
+3. **模特描述**：如果涉及模特，补充自然的表情、姿态、服装搭配
+4. **场景氛围**：丰富背景和氛围描述，使画面更有商业感
+5. **技术规格**：添加相机、镜头等技术参数以提升专业度
+
+注意事项：
+- 保留用户原始意图的核心元素
+- 输出应该是纯文本的完整提示词，不要添加解释
+- 使用中英文混合，专业术语用英文
+- 控制在 200-400 字之间`;
+
+  const response = await ai.models.generateContent({
+    model: model,
+    contents: {
+      parts: [
+        { text: `请优化以下眼镜产品摄影的提示词：\n\n${rawPrompt}` }
+      ]
+    },
+    config: {
+      systemInstruction: systemPrompt,
+      temperature: 0.7
+    }
+  });
+
+  if (response.candidates?.[0]?.content?.parts?.[0]?.text) {
+    return response.candidates[0].content.parts[0].text.trim();
+  }
+  throw new Error("PROMPT_OPTIMIZATION_FAILED");
+};

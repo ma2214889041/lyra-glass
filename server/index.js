@@ -2,9 +2,9 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { templateDb, sessionDb, imageDb } from './db.js';
+import { templateDb, sessionDb, imageDb, tagDb } from './db.js';
 import { login, logout, register, changePassword, authMiddleware, adminMiddleware } from './auth.js';
-import { generateEyewearImage, generatePosterImage, getPromptSuggestions } from './gemini.js';
+import { generateEyewearImage, generatePosterImage, getPromptSuggestions, generateFromTemplate, optimizePrompt } from './gemini.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -120,12 +120,73 @@ app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
   }
 });
 
+// ========== 标签 API ==========
+
+// 获取所有标签
+app.get('/api/tags', (req, res) => {
+  try {
+    const tags = tagDb.getAll();
+    res.json(tags);
+  } catch (error) {
+    console.error('Get tags error:', error);
+    res.status(500).json({ error: '获取标签失败' });
+  }
+});
+
+// 创建标签（需要管理员）
+app.post('/api/tags', adminMiddleware, (req, res) => {
+  try {
+    const { name, color } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: '标签名称不能为空' });
+    }
+    const tag = tagDb.create({ name, color });
+    res.json(tag);
+  } catch (error) {
+    console.error('Create tag error:', error);
+    res.status(500).json({ error: '创建标签失败' });
+  }
+});
+
+// 更新标签（需要管理员）
+app.put('/api/tags/:id', adminMiddleware, (req, res) => {
+  try {
+    const { name, color } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: '标签名称不能为空' });
+    }
+    const tag = tagDb.update(req.params.id, { name, color });
+    if (!tag) {
+      return res.status(404).json({ error: '标签不存在' });
+    }
+    res.json(tag);
+  } catch (error) {
+    console.error('Update tag error:', error);
+    res.status(500).json({ error: '更新标签失败' });
+  }
+});
+
+// 删除标签（需要管理员）
+app.delete('/api/tags/:id', adminMiddleware, (req, res) => {
+  try {
+    const deleted = tagDb.delete(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: '标签不存在' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete tag error:', error);
+    res.status(500).json({ error: '删除标签失败' });
+  }
+});
+
 // ========== 模板 API ==========
 
-// 获取所有模板（公开）
+// 获取所有模板（公开，支持按标签筛选）
 app.get('/api/templates', (req, res) => {
   try {
-    const templates = templateDb.getAll();
+    const { tag } = req.query;
+    const templates = templateDb.getAll(tag || null);
     res.json(templates);
   } catch (error) {
     console.error('Get templates error:', error);
@@ -150,10 +211,10 @@ app.get('/api/templates/:id', (req, res) => {
 // 创建模板（需要管理员）
 app.post('/api/templates', adminMiddleware, (req, res) => {
   try {
-    const { id, name, description, imageUrl, config } = req.body;
+    const { id, name, description, imageUrl, prompt, tags, variables } = req.body;
 
-    if (!id || !imageUrl || !config) {
-      return res.status(400).json({ error: '缺少必要字段' });
+    if (!id || !imageUrl || !prompt) {
+      return res.status(400).json({ error: '缺少必要字段(id, imageUrl, prompt)' });
     }
 
     const template = templateDb.create({
@@ -161,7 +222,9 @@ app.post('/api/templates', adminMiddleware, (req, res) => {
       name: name || '新模板',
       description: description || '',
       imageUrl,
-      config
+      prompt,
+      tags: tags || [],
+      variables: variables || []
     });
 
     res.json(template);
@@ -255,6 +318,58 @@ app.post('/api/generate/poster', authMiddleware, async (req, res) => {
   }
 });
 
+// 使用模板生成（需要登录）
+app.post('/api/generate/template', authMiddleware, async (req, res) => {
+  try {
+    const { imageBase64, templateId, aspectRatio, variableValues, customPrompt } = req.body;
+
+    if (!imageBase64) {
+      return res.status(400).json({ error: '缺少必要参数(imageBase64)' });
+    }
+
+    let finalPrompt;
+    let templateName = '自定义';
+
+    // 如果用户提供了自定义提示词，直接使用
+    if (customPrompt) {
+      finalPrompt = customPrompt;
+    } else if (templateId && templateId !== 'custom') {
+      // 获取模板提示词
+      const template = templateDb.getById(templateId);
+      if (!template) {
+        return res.status(404).json({ error: '模板不存在' });
+      }
+      templateName = template.name;
+
+      // 替换变量占位符
+      finalPrompt = template.prompt;
+      if (variableValues && typeof variableValues === 'object') {
+        for (const [key, value] of Object.entries(variableValues)) {
+          finalPrompt = finalPrompt.replace(new RegExp(`{{${key}}}`, 'g'), value);
+        }
+      }
+    } else {
+      return res.status(400).json({ error: '缺少必要参数(customPrompt 或 templateId)' });
+    }
+
+    const result = await generateFromTemplate(imageBase64, finalPrompt, aspectRatio || '3:4');
+
+    // 保存生成记录
+    const imageId = crypto.randomUUID();
+    imageDb.save({
+      id: imageId,
+      url: result,
+      type: 'template',
+      config: { templateId, templateName, variableValues, customPrompt: !!customPrompt }
+    }, req.user.userId);
+
+    res.json({ success: true, imageUrl: result });
+  } catch (error) {
+    console.error('Generate from template error:', error);
+    res.status(500).json({ error: error.message || '模板生成失败' });
+  }
+});
+
 // 获取提示建议
 app.post('/api/generate/suggestions', async (req, res) => {
   try {
@@ -264,6 +379,21 @@ app.post('/api/generate/suggestions', async (req, res) => {
   } catch (error) {
     console.error('Get suggestions error:', error);
     res.status(500).json({ error: '获取建议失败' });
+  }
+});
+
+// 优化提示词（管理员专用）
+app.post('/api/generate/optimize-prompt', adminMiddleware, async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt || prompt.trim().length === 0) {
+      return res.status(400).json({ error: '请输入需要优化的提示词' });
+    }
+    const optimized = await optimizePrompt(prompt);
+    res.json({ success: true, optimizedPrompt: optimized });
+  } catch (error) {
+    console.error('Optimize prompt error:', error);
+    res.status(500).json({ error: error.message || '优化提示词失败' });
   }
 });
 

@@ -1,4 +1,4 @@
-import { ModelConfig, PosterConfig, TemplateItem, ImageSize, AspectRatio, AppMode, User, GeneratedImage } from '../types';
+import { ModelConfig, PosterConfig, TemplateItem, ImageSize, AspectRatio, AppMode, User, GeneratedImage, Tag } from '../types';
 
 const API_BASE = '/api';
 
@@ -100,11 +100,38 @@ export const authApi = {
   },
 };
 
+// ========== 标签 API ==========
+
+export const tagApi = {
+  getAll: async (): Promise<Tag[]> => {
+    return request<Tag[]>('/tags');
+  },
+
+  create: async (name: string, color?: string): Promise<Tag> => {
+    return request<Tag>('/tags', {
+      method: 'POST',
+      body: JSON.stringify({ name, color }),
+    });
+  },
+
+  update: async (id: string, name: string, color?: string): Promise<Tag> => {
+    return request<Tag>(`/tags/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name, color }),
+    });
+  },
+
+  delete: async (id: string): Promise<void> => {
+    await request(`/tags/${id}`, { method: 'DELETE' });
+  },
+};
+
 // ========== 模板 API ==========
 
 export const templateApi = {
-  getAll: async (): Promise<TemplateItem[]> => {
-    return request<TemplateItem[]>('/templates');
+  getAll: async (tag?: string): Promise<TemplateItem[]> => {
+    const query = tag ? `?tag=${tag}` : '';
+    return request<TemplateItem[]>(`/templates${query}`);
   },
 
   getById: async (id: string): Promise<TemplateItem> => {
@@ -159,6 +186,23 @@ export const generateApi = {
       {
         method: 'POST',
         body: JSON.stringify({ imageBase64, config, size, aspectRatio }),
+      }
+    );
+    return result.imageUrl;
+  },
+
+  // 使用模板生成
+  fromTemplate: async (
+    imageBase64: string,
+    templateId: string,
+    variableValues?: Record<string, string>,
+    aspectRatio?: AspectRatio
+  ): Promise<string> => {
+    const result = await request<{ success: boolean; imageUrl: string }>(
+      '/generate/template',
+      {
+        method: 'POST',
+        body: JSON.stringify({ imageBase64, templateId, variableValues, aspectRatio }),
       }
     );
     return result.imageUrl;

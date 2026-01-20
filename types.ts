@@ -52,12 +52,31 @@ export interface StylePreset {
   config: Partial<ModelConfig>;
 }
 
+// 模板变量定义
+export interface TemplateVariable {
+  key: string;          // 变量占位符，如 {{title}}
+  label: string;        // 显示标签，如 "海报标题"
+  type: 'text' | 'textarea' | 'select';  // 输入类型
+  options?: string[];   // select 类型的选项
+  defaultValue?: string;
+  required?: boolean;
+}
+
+// 标签定义
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+}
+
 export interface TemplateItem {
   id: string;
   imageUrl: string;
   name: string;
   description: string;
-  config: ModelConfig;
+  prompt: string;                    // 核心提示词，可包含 {{variable}} 占位符
+  tags: string[];                    // 标签ID数组（支持多标签）
+  variables: TemplateVariable[];     // 用户可填入的变量
 }
 
 export interface GeneratedImage {

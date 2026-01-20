@@ -5,9 +5,10 @@ import {
   AppMode, NavTab, ImageSize, AspectRatio, PosterConfig,
   GeneratedImage, ModelConfig, EyewearType,
   EthnicityType, LightingType, FramingType, CommercialStyle, ModelVibe,
-  CameraType, LensType, SkinTexture, MoodType, StylePreset, TemplateItem, User
+  CameraType, LensType, SkinTexture, MoodType, StylePreset, TemplateItem, User,
+  Tag, TemplateVariable
 } from './types';
-import { authApi, templateApi, generateApi, userApi } from './services/api';
+import { authApi, templateApi, generateApi, userApi, tagApi } from './services/api';
 import { Button } from './components/Button';
 import { FeatureCard } from './components/FeatureCard';
 import { IconCamera, IconUpload, IconModel, IconCreative, IconPoster, IconGallery } from './components/Icons';
@@ -53,7 +54,7 @@ const App: React.FC = () => {
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<GeneratedImage[]>([]);
-  
+
   // 模板系统数据 - 从后端获取
   const [templates, setTemplates] = useState<TemplateItem[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
@@ -70,6 +71,23 @@ const App: React.FC = () => {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [newTemplateImage, setNewTemplateImage] = useState<string | null>(null);
+
+  // 新模板表单状态
+  const [newTemplateName, setNewTemplateName] = useState('');
+  const [newTemplateDesc, setNewTemplateDesc] = useState('');
+  const [newTemplatePrompt, setNewTemplatePrompt] = useState('');
+  const [newTemplateTags, setNewTemplateTags] = useState<string[]>([]);
+  const [newTemplateVariables, setNewTemplateVariables] = useState<TemplateVariable[]>([]);
+
+  // 标签数据
+  const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [filterTag, setFilterTag] = useState<string | null>(null);  // 模板广场筛选
+
+  // 模板生成状态
+  const [selectedTemplate, setSelectedTemplate] = useState<TemplateItem | null>(null);
+  const [templateVariableValues, setTemplateVariableValues] = useState<Record<string, string>>({});
+  const [editablePrompt, setEditablePrompt] = useState('');  // 用户可编辑的提示词
+  const [showTemplateDetail, setShowTemplateDetail] = useState(false);  // 显示模板详情弹窗
 
   // 用户历史记录
   const [userHistory, setUserHistory] = useState<GeneratedImage[]>([]);
@@ -97,6 +115,16 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // 加载标签数据
+  const loadTags = useCallback(async () => {
+    try {
+      const data = await tagApi.getAll();
+      setAllTags(data);
+    } catch (err) {
+      console.error('加载标签失败:', err);
+    }
+  }, []);
+
   // 加载用户历史记录
   const loadUserHistory = useCallback(async () => {
     if (!currentUser) return;
@@ -119,7 +147,8 @@ const App: React.FC = () => {
     };
     verifyAuth();
     loadTemplates();
-  }, [loadTemplates]);
+    loadTags();
+  }, [loadTemplates, loadTags]);
 
   // 当用户登录后加载历史记录
   useEffect(() => {
@@ -224,32 +253,120 @@ const App: React.FC = () => {
   };
 
   const handleApplyTemplate = (template: TemplateItem) => {
-    setModelConfig(template.config);
     if (!imageBase64) {
       navigate('/');
       setError("请先上传您的眼镜图片");
-    } else {
-      setMode(AppMode.MODEL_CONFIG);
+      return;
+    }
+    // 设置选中的模板并初始化变量值
+    setSelectedTemplate(template);
+    const initialValues: Record<string, string> = {};
+    template.variables?.forEach(v => {
+      initialValues[v.key] = v.defaultValue || '';
+    });
+    setTemplateVariableValues(initialValues);
+    setMode(AppMode.PRESET_STYLES);
+    navigate('/');
+  };
+
+  // 使用模板生成
+  const handleGenerateFromTemplate = async () => {
+    if (!currentUser) {
+      setError('请先登录后再生成图片');
+      navigate('/login');
+      return;
+    }
+    if (!selectedTemplate || !imageBase64) return;
+
+    setIsGenerating(true);
+    setError(null);
+    try {
+      const url = await generateApi.fromTemplate(
+        imageBase64,
+        selectedTemplate.id,
+        templateVariableValues
+      );
+      setGeneratedImage(url);
+      setMode(AppMode.RESULT);
       navigate('/');
+      loadUserHistory();
+    } catch (err: any) {
+      setError(err.message || '模板生成失败');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // 使用自定义提示词生成（用户可编辑后直接生成）
+  const handleGenerateWithPrompt = async (customPrompt: string) => {
+    if (!currentUser) {
+      setError('请先登录后再生成图片');
+      navigate('/login');
+      return;
+    }
+    if (!imageBase64) {
+      setError('请先上传眼镜图片');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+    navigate('/');
+    setMode(AppMode.RESULT);
+
+    try {
+      // 直接调用后端模板生成API，使用自定义提示词
+      const response = await fetch('/api/generate/template', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('lyra_auth_token')}`
+        },
+        body: JSON.stringify({
+          imageBase64,
+          templateId: selectedTemplate?.id || 'custom',
+          variableValues: {},
+          customPrompt  // 后端需要支持这个参数
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      setGeneratedImage(data.imageUrl);
+      loadUserHistory();
+    } catch (err: any) {
+      setError(err.message || '生成失败');
+    } finally {
+      setIsGenerating(false);
     }
   };
 
   const handleAdminAddTemplate = async () => {
-    if (!newTemplateImage) return;
+    if (!newTemplateImage || !newTemplatePrompt) {
+      setError('请上传图片并填写提示词');
+      return;
+    }
     try {
       const newTpl: TemplateItem = {
         id: Date.now().toString(),
         imageUrl: newTemplateImage,
-        name: "新上传模板",
-        description: "由管理员配置",
-        config: { ...modelConfig }
+        name: newTemplateName || '新上传模板',
+        description: newTemplateDesc || '',
+        prompt: newTemplatePrompt,
+        tags: newTemplateTags,
+        variables: newTemplateVariables
       };
       await templateApi.create(newTpl);
-      await loadTemplates(); // 重新加载模板列表
+      await loadTemplates();
+      // 重置表单
       setNewTemplateImage(null);
-      alert("模板已添加至广场");
+      setNewTemplateName('');
+      setNewTemplateDesc('');
+      setNewTemplatePrompt('');
+      setNewTemplateTags([]);
+      setNewTemplateVariables([]);
+      alert('模板已添加至广场');
     } catch (err: any) {
-      setError(err.message || "添加模板失败");
+      setError(err.message || '添加模板失败');
     }
   };
 
@@ -290,39 +407,141 @@ const App: React.FC = () => {
   };
 
   // 渲染模板广场
-  const renderTemplateGallery = () => (
-    <div className="space-y-12 animate-fade-in pb-20">
-      <div className="space-y-4 text-center max-w-xl mx-auto">
-        <h2 className="text-5xl font-serif italic text-white">模板广场</h2>
-        <p className="text-zinc-500 text-xs uppercase tracking-[0.3em] font-black">Curated Masterpiece Library</p>
-      </div>
+  const renderTemplateGallery = () => {
+    // 根据筛选标签过滤模板
+    const filteredTemplates = filterTag
+      ? templates.filter(t => t.tags?.includes(filterTag))
+      : templates;
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
-        {templates.length === 0 && (
-          <div className="col-span-full py-32 text-center ios-card">
-            <p className="text-zinc-600 font-black uppercase tracking-widest text-[10px]">暂无公开模板，请前往管理后台上传</p>
-          </div>
-        )}
-        {templates.map(tpl => (
-          <div 
-            key={tpl.id}
-            onClick={() => handleApplyTemplate(tpl)}
-            className="group relative aspect-[3/4] rounded-[3rem] overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-all duration-700 hover:scale-[1.02] shadow-2xl"
+    return (
+      <div className="space-y-12 animate-fade-in pb-20">
+        <div className="space-y-4 text-center max-w-xl mx-auto">
+          <h2 className="text-5xl font-serif italic text-white">模板广场</h2>
+          <p className="text-zinc-500 text-xs uppercase tracking-[0.3em] font-black">Curated Masterpiece Library</p>
+        </div>
+
+        {/* 标签筛选栏 */}
+        <div className="flex flex-wrap justify-center gap-3">
+          <button
+            onClick={() => setFilterTag(null)}
+            className={`px-5 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${!filterTag ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-500 border border-white/5 hover:border-white/20'}`}
           >
-            <img src={tpl.imageUrl} className="w-full h-full object-cover grayscale-[0.5] group-hover:grayscale-0 transition-all duration-700" />
-            <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80 group-hover:opacity-100 transition-opacity"></div>
-            <div className="absolute bottom-10 left-10 right-10 space-y-3 translate-y-4 group-hover:translate-y-0 transition-all duration-700">
-              <h3 className="text-2xl font-serif italic text-white">{tpl.name}</h3>
-              <p className="text-zinc-400 text-[10px] uppercase tracking-widest font-bold line-clamp-1">{tpl.description}</p>
-              <div className="pt-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                <span className="px-5 py-2 rounded-full bg-white text-black text-[9px] font-black uppercase tracking-widest">立即套用</span>
+            全部
+          </button>
+          {allTags.map(tag => (
+            <button
+              key={tag.id}
+              onClick={() => setFilterTag(tag.id)}
+              className={`px-5 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${filterTag === tag.id ? 'text-white' : 'bg-zinc-900 text-zinc-500 border border-white/5 hover:border-white/20'}`}
+              style={filterTag === tag.id ? { backgroundColor: tag.color } : {}}
+            >
+              {tag.name}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+          {filteredTemplates.length === 0 && (
+            <div className="col-span-full py-32 text-center ios-card">
+              <p className="text-zinc-600 font-black uppercase tracking-widest text-[10px]">暂无匹配的模板</p>
+            </div>
+          )}
+          {filteredTemplates.map(tpl => (
+            <div
+              key={tpl.id}
+              onClick={() => {
+                setSelectedTemplate(tpl);
+                setEditablePrompt(tpl.prompt);
+                setShowTemplateDetail(true);
+              }}
+              className="group relative aspect-[3/4] rounded-[3rem] overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-all duration-700 hover:scale-[1.02] shadow-2xl"
+            >
+              <img src={tpl.imageUrl} className="w-full h-full object-cover grayscale-[0.5] group-hover:grayscale-0 transition-all duration-700" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80 group-hover:opacity-100 transition-opacity"></div>
+              {/* 标签显示 */}
+              <div className="absolute top-6 left-6 flex flex-wrap gap-2">
+                {tpl.tags?.map(tagId => {
+                  const tag = allTags.find(t => t.id === tagId);
+                  return tag ? (
+                    <span key={tagId} className="px-3 py-1 rounded-full text-[8px] font-bold text-white" style={{ backgroundColor: tag.color }}>
+                      {tag.name}
+                    </span>
+                  ) : null;
+                })}
+              </div>
+              <div className="absolute bottom-10 left-10 right-10 space-y-3 translate-y-4 group-hover:translate-y-0 transition-all duration-700">
+                <h3 className="text-2xl font-serif italic text-white">{tpl.name}</h3>
+                <p className="text-zinc-400 text-[10px] uppercase tracking-widest font-bold line-clamp-1">{tpl.description}</p>
+                <div className="pt-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="px-5 py-2 rounded-full bg-white text-black text-[9px] font-black uppercase tracking-widest">查看详情</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* 模板详情弹窗 */}
+        {showTemplateDetail && selectedTemplate && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6" onClick={() => setShowTemplateDetail(false)}>
+            <div className="bg-zinc-900 rounded-[2rem] max-w-2xl w-full max-h-[90vh] overflow-y-auto p-8 space-y-6" onClick={e => e.stopPropagation()}>
+              <div className="flex items-start gap-6">
+                <img src={selectedTemplate.imageUrl} className="w-32 h-40 object-cover rounded-2xl" />
+                <div className="flex-1 space-y-2">
+                  <h3 className="text-2xl font-serif italic text-white">{selectedTemplate.name}</h3>
+                  <p className="text-zinc-500 text-sm">{selectedTemplate.description}</p>
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    {selectedTemplate.tags?.map(tagId => {
+                      const tag = allTags.find(t => t.id === tagId);
+                      return tag ? (
+                        <span key={tagId} className="px-3 py-1 rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: tag.color }}>
+                          {tag.name}
+                        </span>
+                      ) : null;
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">提示词 (可修改)</label>
+                <textarea
+                  value={editablePrompt}
+                  onChange={(e) => setEditablePrompt(e.target.value)}
+                  rows={6}
+                  className="w-full px-4 py-3 bg-zinc-800 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20 resize-none"
+                />
+              </div>
+
+              <div className="flex gap-4">
+                <button
+                  onClick={() => setShowTemplateDetail(false)}
+                  className="flex-1 py-4 rounded-2xl bg-zinc-800 text-zinc-400 text-[10px] font-black uppercase tracking-widest hover:bg-zinc-700 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => {
+                    if (!imageBase64) {
+                      setShowTemplateDetail(false);
+                      navigate('/');
+                      setError('请先上传您的眼镜图片');
+                      return;
+                    }
+                    // 使用编辑后的提示词生成
+                    setShowTemplateDetail(false);
+                    handleGenerateWithPrompt(editablePrompt);
+                  }}
+                  className="flex-1 py-4 rounded-2xl bg-white text-black text-[10px] font-black uppercase tracking-widest hover:bg-zinc-200 transition-colors"
+                >
+                  立即生成
+                </button>
               </div>
             </div>
           </div>
-        ))}
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   // 渲染配置页面
   const renderConfig = () => {
@@ -342,23 +561,23 @@ const App: React.FC = () => {
 
         <div className="space-y-10">
           <SelectorGroup title="角色模型" icon={<IconModel />} color="text-white">
-            <Selector label="族裔" options={Object.keys(ethnicityMap)} current={modelConfig.ethnicity} onChange={(v: any) => setModelConfig(p => ({...p, ethnicity: v}))} labelMap={ethnicityMap} />
+            <Selector label="族裔" options={Object.keys(ethnicityMap)} current={modelConfig.ethnicity} onChange={(v: any) => setModelConfig(p => ({ ...p, ethnicity: v }))} labelMap={ethnicityMap} />
             <div className="grid grid-cols-2 gap-8">
-              <Selector label="年龄段" options={['Youth', 'Adult', 'Mature']} current={modelConfig.age} onChange={(v: any) => setModelConfig(p => ({...p, age: v}))} labelMap={{'Youth':'青年','Adult':'成熟','Mature':'资深'}} />
-              <Selector label="性别" options={['Female', 'Male']} current={modelConfig.gender} onChange={(v: any) => setModelConfig(p => ({...p, gender: v}))} labelMap={{'Female':'女性','Male':'男性'}} />
+              <Selector label="年龄段" options={['Youth', 'Adult', 'Mature']} current={modelConfig.age} onChange={(v: any) => setModelConfig(p => ({ ...p, age: v }))} labelMap={{ 'Youth': '青年', 'Adult': '成熟', 'Mature': '资深' }} />
+              <Selector label="性别" options={['Female', 'Male']} current={modelConfig.gender} onChange={(v: any) => setModelConfig(p => ({ ...p, gender: v }))} labelMap={{ 'Female': '女性', 'Male': '男性' }} />
             </div>
           </SelectorGroup>
 
           <SelectorGroup title="摄影规格" icon={<IconCamera />} color="text-blue-400">
-            <Selector label="景别选择" options={Object.keys(framingMap)} current={modelConfig.framing} onChange={(v: any) => setModelConfig(p => ({...p, framing: v}))} labelMap={framingMap} />
-            <Selector label="商业用途" options={Object.keys(purposeMap)} current={modelConfig.visualPurpose} onChange={(v: any) => setModelConfig(p => ({...p, visualPurpose: v}))} labelMap={purposeMap} />
+            <Selector label="景别选择" options={Object.keys(framingMap)} current={modelConfig.framing} onChange={(v: any) => setModelConfig(p => ({ ...p, framing: v }))} labelMap={framingMap} />
+            <Selector label="商业用途" options={Object.keys(purposeMap)} current={modelConfig.visualPurpose} onChange={(v: any) => setModelConfig(p => ({ ...p, visualPurpose: v }))} labelMap={purposeMap} />
           </SelectorGroup>
 
           {configDepth === 'master' && (
             <SelectorGroup title="光学渲染 (Master Only)" icon={<IconCreative />} color="text-yellow-400">
-               <Selector label="摄影机" options={['Hasselblad H6D', 'Sony A7R V', 'Leica M11']} current={modelConfig.camera} onChange={(v: any) => setModelConfig(p => ({...p, camera: v}))} />
-               <Selector label="灯光策略" options={['Softbox Diffused', 'Butterfly (Paramount)', 'Rembrandt', 'Neon Noir']} current={modelConfig.lighting} onChange={(v: any) => setModelConfig(p => ({...p, lighting: v}))} />
-               <Selector label="胶片色调" options={['Natural Soft', 'Vintage Film', 'Cinematic Teal & Orange']} current={modelConfig.mood} onChange={(v: any) => setModelConfig(p => ({...p, mood: v}))} />
+              <Selector label="摄影机" options={['Hasselblad H6D', 'Sony A7R V', 'Leica M11']} current={modelConfig.camera} onChange={(v: any) => setModelConfig(p => ({ ...p, camera: v }))} />
+              <Selector label="灯光策略" options={['Softbox Diffused', 'Butterfly (Paramount)', 'Rembrandt', 'Neon Noir']} current={modelConfig.lighting} onChange={(v: any) => setModelConfig(p => ({ ...p, lighting: v }))} />
+              <Selector label="胶片色调" options={['Natural Soft', 'Vintage Film', 'Cinematic Teal & Orange']} current={modelConfig.mood} onChange={(v: any) => setModelConfig(p => ({ ...p, mood: v }))} />
             </SelectorGroup>
           )}
 
@@ -431,7 +650,7 @@ const App: React.FC = () => {
         <div className="flex items-center justify-between">
           <div className="space-y-4">
             <h2 className="text-5xl font-serif italic text-white">管理员后台</h2>
-            <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Template & Logic Management</p>
+            <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Template & Prompt Management</p>
           </div>
           <button
             onClick={handleAdminLogout}
@@ -442,42 +661,142 @@ const App: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-          <div className="space-y-8">
-             <div
-               onClick={() => adminFileInputRef.current?.click()}
-               className="aspect-[3/4] rounded-[2.5rem] bg-zinc-900 border border-dashed border-white/10 flex items-center justify-center cursor-pointer overflow-hidden"
-             >
-               {newTemplateImage ? (
-                 <img src={newTemplateImage} className="w-full h-full object-cover" />
-               ) : (
-                 <span className="text-zinc-500 font-bold uppercase tracking-widest text-[9px]">点击上传模板底图</span>
-               )}
-               <input type="file" ref={adminFileInputRef} className="hidden" onChange={async (e) => {
-                 if (e.target.files?.[0]) setNewTemplateImage(`data:image/jpeg;base64,${await convertBlobToBase64(e.target.files[0])}`);
-               }} />
-             </div>
-             <Button onClick={handleAdminAddTemplate} className="w-full h-16 rounded-2xl">发布至模板广场</Button>
+          {/* 左列：图片上传 */}
+          <div className="space-y-6">
+            <div
+              onClick={() => adminFileInputRef.current?.click()}
+              className="aspect-[3/4] rounded-[2.5rem] bg-zinc-900 border border-dashed border-white/10 flex items-center justify-center cursor-pointer overflow-hidden"
+            >
+              {newTemplateImage ? (
+                <img src={newTemplateImage} className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-zinc-500 font-bold uppercase tracking-widest text-[9px]">点击上传效果示例图</span>
+              )}
+              <input type="file" ref={adminFileInputRef} className="hidden" onChange={async (e) => {
+                if (e.target.files?.[0]) setNewTemplateImage(`data:image/jpeg;base64,${await convertBlobToBase64(e.target.files[0])}`);
+              }} />
+            </div>
           </div>
 
-          <div className="space-y-8">
-             <div className="p-8 ios-card space-y-6">
-                <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">当前模板 Prompt 参数映射</h4>
-                {renderConfig()}
-             </div>
-             <div className="space-y-4">
-                <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">已上传列表</h4>
-                <div className="space-y-3">
-                  {templates.map(t => (
-                    <div key={t.id} className="p-4 bg-zinc-900/50 rounded-xl flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <img src={t.imageUrl} className="w-10 h-10 rounded-lg object-cover" />
-                        <span className="text-xs font-bold text-zinc-300">{t.name}</span>
-                      </div>
-                      <button onClick={() => handleDeleteTemplate(t.id)} className="text-red-900 text-[10px] font-black uppercase hover:text-red-500 transition-colors">删除</button>
-                    </div>
+          {/* 右列：表单 */}
+          <div className="space-y-6">
+            <div className="p-8 ios-card space-y-6">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">模板信息</h4>
+
+              {/* 模板名称 */}
+              <div className="space-y-2">
+                <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">模板名称</label>
+                <input
+                  type="text"
+                  value={newTemplateName}
+                  onChange={(e) => setNewTemplateName(e.target.value)}
+                  className="w-full px-4 py-3 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20"
+                  placeholder="例如：都市精英风格"
+                />
+              </div>
+
+              {/* 标签（多选） */}
+              <div className="space-y-2">
+                <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">标签（可多选）</label>
+                <div className="flex flex-wrap gap-2">
+                  {allTags.map(tag => (
+                    <button
+                      key={tag.id}
+                      onClick={() => {
+                        setNewTemplateTags(prev =>
+                          prev.includes(tag.id)
+                            ? prev.filter(t => t !== tag.id)
+                            : [...prev, tag.id]
+                        );
+                      }}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${newTemplateTags.includes(tag.id) ? 'text-white border-white' : 'bg-zinc-900 text-zinc-500 border-white/5 hover:border-white/20'}`}
+                      style={newTemplateTags.includes(tag.id) ? { backgroundColor: tag.color, borderColor: tag.color } : {}}
+                    >
+                      {tag.name}
+                    </button>
                   ))}
                 </div>
-             </div>
+              </div>
+
+              {/* 描述 */}
+              <div className="space-y-2">
+                <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">描述</label>
+                <input
+                  type="text"
+                  value={newTemplateDesc}
+                  onChange={(e) => setNewTemplateDesc(e.target.value)}
+                  className="w-full px-4 py-3 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20"
+                  placeholder="简短描述此模板风格"
+                />
+              </div>
+
+              {/* 提示词 */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">
+                    提示词 Prompt <span className="text-zinc-700">(支持 {'{{变量名}}'} 占位符)</span>
+                  </label>
+                  <button
+                    onClick={async () => {
+                      if (!newTemplatePrompt.trim()) {
+                        setError('请先输入提示词');
+                        return;
+                      }
+                      setIsGenerating(true);
+                      try {
+                        const response = await fetch('/api/generate/optimize-prompt', {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('lyra_auth_token')}`
+                          },
+                          body: JSON.stringify({ prompt: newTemplatePrompt })
+                        });
+                        const data = await response.json();
+                        if (!response.ok) throw new Error(data.error);
+                        setNewTemplatePrompt(data.optimizedPrompt);
+                      } catch (err: any) {
+                        setError(err.message || 'AI优化失败');
+                      } finally {
+                        setIsGenerating(false);
+                      }
+                    }}
+                    disabled={isGenerating}
+                    className="px-4 py-2 rounded-xl text-[10px] font-bold bg-gradient-to-r from-purple-600 to-blue-600 text-white hover:opacity-80 transition-opacity disabled:opacity-50"
+                  >
+                    {isGenerating ? '优化中...' : '✨ AI 优化'}
+                  </button>
+                </div>
+                <textarea
+                  value={newTemplatePrompt}
+                  onChange={(e) => setNewTemplatePrompt(e.target.value)}
+                  rows={6}
+                  className="w-full px-4 py-3 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20 resize-none"
+                  placeholder="例如：东亚女性模特，{{title}}标题，都市精英风格，自然午后暖阳..."
+                />
+              </div>
+            </div>
+
+            <Button onClick={handleAdminAddTemplate} className="w-full h-16 rounded-2xl">发布至模板广场</Button>
+
+            {/* 已上传列表 */}
+            <div className="space-y-4 pt-6">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">已上传列表</h4>
+              <div className="space-y-3">
+                {templates.map(t => (
+                  <div key={t.id} className="p-4 bg-zinc-900/50 rounded-xl flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <img src={t.imageUrl} className="w-10 h-10 rounded-lg object-cover" />
+                      <div>
+                        <span className="text-xs font-bold text-zinc-300">{t.name}</span>
+                        <span className="ml-2 text-[9px] text-zinc-600 uppercase">{t.category}</span>
+                      </div>
+                    </div>
+                    <button onClick={() => handleDeleteTemplate(t.id)} className="text-red-900 text-[10px] font-black uppercase hover:text-red-500 transition-colors">删除</button>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -498,7 +817,7 @@ const App: React.FC = () => {
           <NavItem active={location.pathname === '/gallery'} onClick={() => navigate('/gallery')} icon={<IconGallery />} label="作品集" />
           {currentUser?.role === 'admin' && (
             <div className="pt-20">
-               <NavItem active={location.pathname === '/admin'} onClick={() => navigate('/admin')} icon={<IconSettings />} label="后台管理" />
+              <NavItem active={location.pathname === '/admin'} onClick={() => navigate('/admin')} icon={<IconSettings />} label="后台管理" />
             </div>
           )}
         </nav>
@@ -676,62 +995,62 @@ const App: React.FC = () => {
               </div>
             } />
             <Route path="/" element={
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-16">
-              <div className="xl:col-span-7">
-                <div className="aspect-[3/4] rounded-[3.5rem] overflow-hidden border border-white/5 bg-[#080808] flex items-center justify-center relative shadow-2xl">
-                  {!imageBase64 ? (
-                    <div className="p-12 text-center space-y-12 animate-fade-in">
-                       <h1 className="text-7xl font-black font-serif italic text-white leading-tight tracking-tight">上传您的资产</h1>
-                       <div className="flex flex-col gap-4 max-w-xs mx-auto">
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-16">
+                <div className="xl:col-span-7">
+                  <div className="aspect-[3/4] rounded-[3.5rem] overflow-hidden border border-white/5 bg-[#080808] flex items-center justify-center relative shadow-2xl">
+                    {!imageBase64 ? (
+                      <div className="p-12 text-center space-y-12 animate-fade-in">
+                        <h1 className="text-7xl font-black font-serif italic text-white leading-tight tracking-tight">上传您的资产</h1>
+                        <div className="flex flex-col gap-4 max-w-xs mx-auto">
                           <Button onClick={() => fileInputRef.current?.click()} className="rounded-3xl h-20 text-sm"><IconUpload /> <span className="ml-3">上传眼镜 PNG/JPG</span></Button>
                           <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
                           <p className="text-zinc-600 text-[9px] uppercase tracking-widest">请确保眼镜主体清晰，背景尽可能纯净</p>
-                       </div>
-                    </div>
-                  ) : (
-                    <>
-                      <img src={generatedImage || previewUrl!} className={`max-w-full max-h-full object-contain ${isGenerating ? 'opacity-30 blur-3xl grayscale transition-all duration-1000' : 'transition-all duration-700'}`} />
-                      {isGenerating && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-10 bg-black/40 backdrop-blur-3xl px-12 text-center">
-                           <div className="relative">
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <img src={generatedImage || previewUrl!} className={`max-w-full max-h-full object-contain ${isGenerating ? 'opacity-30 blur-3xl grayscale transition-all duration-1000' : 'transition-all duration-700'}`} />
+                        {isGenerating && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-10 bg-black/40 backdrop-blur-3xl px-12 text-center">
+                            <div className="relative">
                               <div className="w-24 h-24 border-2 border-white/10 rounded-full"></div>
                               <div className="absolute inset-0 w-24 h-24 border-t-2 border-white rounded-full animate-spin"></div>
-                           </div>
-                           <p className="text-[12px] text-white uppercase tracking-[0.4em] font-black animate-pulse">正在执行物理锁定渲染...</p>
-                        </div>
-                      )}
-                    </>
+                            </div>
+                            <p className="text-[12px] text-white uppercase tracking-[0.4em] font-black animate-pulse">正在执行物理锁定渲染...</p>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="xl:col-span-5">
+                  {mode === AppMode.DASHBOARD && (
+                    <div className="space-y-10">
+                      <h2 className="text-6xl font-black italic font-serif text-white">开始创作</h2>
+                      <div className="grid gap-6">
+                        <FeatureCard title="商业模特试戴" description="一键配置模特属性，支持物理光影锁定与折射追踪。" icon={<IconModel />} onClick={() => setMode(AppMode.MODEL_CONFIG)} />
+                        <FeatureCard title="从模板生成" description="套用高质量大师模板，一键获得品牌级视觉效果。" icon={<IconPoster />} onClick={() => navigate('/templates')} />
+                      </div>
+                    </div>
+                  )}
+                  {mode === AppMode.MODEL_CONFIG && renderConfig()}
+                  {mode === AppMode.RESULT && generatedImage && (
+                    <div className="space-y-10 animate-fade-in">
+                      <h2 className="text-6xl font-serif italic text-white">渲染完成</h2>
+                      <div className="space-y-4">
+                        <Button onClick={() => {
+                          const link = document.createElement('a');
+                          link.href = generatedImage!;
+                          link.download = `lyra-shoot.png`;
+                          link.click();
+                        }} className="w-full h-24 rounded-[2.5rem] bg-white text-black font-black text-sm">导出商业级原图</Button>
+                        <Button variant="outline" onClick={() => setMode(AppMode.DASHBOARD)} className="w-full h-24 rounded-[2.5rem] text-sm">重新配置</Button>
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
-
-              <div className="xl:col-span-5">
-                {mode === AppMode.DASHBOARD && (
-                  <div className="space-y-10">
-                    <h2 className="text-6xl font-black italic font-serif text-white">开始创作</h2>
-                    <div className="grid gap-6">
-                       <FeatureCard title="商业模特试戴" description="一键配置模特属性，支持物理光影锁定与折射追踪。" icon={<IconModel />} onClick={() => setMode(AppMode.MODEL_CONFIG)} />
-                       <FeatureCard title="从模板生成" description="套用高质量大师模板，一键获得品牌级视觉效果。" icon={<IconPoster />} onClick={() => navigate('/templates')} />
-                    </div>
-                  </div>
-                )}
-                {mode === AppMode.MODEL_CONFIG && renderConfig()}
-                {mode === AppMode.RESULT && generatedImage && (
-                  <div className="space-y-10 animate-fade-in">
-                    <h2 className="text-6xl font-serif italic text-white">渲染完成</h2>
-                    <div className="space-y-4">
-                      <Button onClick={() => {
-                        const link = document.createElement('a');
-                        link.href = generatedImage!;
-                        link.download = `lyra-shoot.png`;
-                        link.click();
-                      }} className="w-full h-24 rounded-[2.5rem] bg-white text-black font-black text-sm">导出商业级原图</Button>
-                      <Button variant="outline" onClick={() => setMode(AppMode.DASHBOARD)} className="w-full h-24 rounded-[2.5rem] text-sm">重新配置</Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
             } />
           </Routes>
         </div>
@@ -744,7 +1063,7 @@ const App: React.FC = () => {
 
 // 辅助图标
 const IconSettings = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
 );
 
 const NavItem = ({ active, onClick, icon, label }: any) => (
