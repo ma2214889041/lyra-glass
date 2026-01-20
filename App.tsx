@@ -6,9 +6,10 @@ import {
   GeneratedImage, ModelConfig, EyewearType,
   EthnicityType, LightingType, FramingType, CommercialStyle, ModelVibe,
   CameraType, LensType, SkinTexture, MoodType, StylePreset, TemplateItem, User,
-  Tag, TemplateVariable
+  Tag, TemplateVariable, PREDEFINED_MODEL_VARIABLES, EXTENDED_VARIABLES,
+  PromptHistoryItem, FavoriteTemplate
 } from './types';
-import { authApi, templateApi, generateApi, userApi, tagApi } from './services/api';
+import { authApi, templateApi, generateApi, userApi, tagApi, feedbackApi, batchApi, taskApi } from './services/api';
 import { Button } from './components/Button';
 import { FeatureCard } from './components/FeatureCard';
 import { IconCamera, IconUpload, IconModel, IconCreative, IconPoster, IconGallery } from './components/Icons';
@@ -79,15 +80,286 @@ const App: React.FC = () => {
   const [newTemplateTags, setNewTemplateTags] = useState<string[]>([]);
   const [newTemplateVariables, setNewTemplateVariables] = useState<TemplateVariable[]>([]);
 
+  // AI优化后的男女版本prompt
+  const [optimizedPrompts, setOptimizedPrompts] = useState<{ female: string | null; male: string | null }>({ female: null, male: null });
+  const [showOptimizedPrompts, setShowOptimizedPrompts] = useState(false);
+
   // 标签数据
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [filterTag, setFilterTag] = useState<string | null>(null);  // 模板广场筛选
 
   // 模板生成状态
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateItem | null>(null);
-  const [templateVariableValues, setTemplateVariableValues] = useState<Record<string, string>>({});
   const [editablePrompt, setEditablePrompt] = useState('');  // 用户可编辑的提示词
   const [showTemplateDetail, setShowTemplateDetail] = useState(false);  // 显示模板详情弹窗
+
+  // 用户生成选项
+  const [userModelGender, setUserModelGender] = useState('女性');
+  const [userModelEthnicity, setUserModelEthnicity] = useState('东亚人');
+  const [userModelAge, setUserModelAge] = useState('成年');
+  const [userImageQuality, setUserImageQuality] = useState<'1K' | '2K' | '4K'>('1K');
+  const [userAspectRatio, setUserAspectRatio] = useState<'1:1' | '3:4' | '4:3' | '9:16' | '16:9'>('3:4');
+  const [promptCopied, setPromptCopied] = useState(false);
+
+  // 扩展变量状态
+  const [userExpression, setUserExpression] = useState('自然');
+  const [userPose, setUserPose] = useState('正面');
+  const [userHairStyle, setUserHairStyle] = useState('自然');
+  const [userClothingStyle, setUserClothingStyle] = useState('中性色');
+
+  // 高级模式
+  const [isEditMode, setIsEditMode] = useState(false);  // 提示词编辑模式
+  const [editedPrompt, setEditedPrompt] = useState('');  // 编辑后的提示词
+  const [isBatchMode, setIsBatchMode] = useState(false);  // 批量生成模式
+  const [batchCombinations, setBatchCombinations] = useState<Array<{
+    ethnicity: string;
+    age: string;
+    selected: boolean;
+  }>>([]);
+
+  // 收藏状态
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const [favoriteTemplates, setFavoriteTemplates] = useState<FavoriteTemplate[]>([]);
+
+  // 提示词历史
+  const [promptHistory, setPromptHistory] = useState<PromptHistoryItem[]>([]);
+  const [showPromptHistory, setShowPromptHistory] = useState(false);
+
+  // 生成结果反馈
+  const [lastGeneratedImageId, setLastGeneratedImageId] = useState<string | null>(null);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
+
+  // 批量生成结果
+  const [batchResults, setBatchResults] = useState<Array<{ imageId: string; imageUrl: string; combination: any }>>([]);
+  const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+
+  // 异步任务队列状态
+  interface TaskItem {
+    id: string;
+    type: 'generate' | 'batch';
+    status: 'pending' | 'processing' | 'completed' | 'failed';
+    progress: number;
+    errorMessage?: string;
+    createdAt: number;
+  }
+  const [activeTasks, setActiveTasks] = useState<TaskItem[]>([]);
+  const [showTaskQueue, setShowTaskQueue] = useState(false);
+  const [taskPollingEnabled, setTaskPollingEnabled] = useState(true);
+
+  // 中英文映射（用于生成英文prompt）
+  const ethnicityToEnglish: Record<string, string> = {
+    '东亚人': 'East Asian',
+    '东南亚人': 'Southeast Asian',
+    '南亚人': 'South Asian',
+    '欧裔': 'Caucasian',
+    '非裔': 'African',
+    '拉丁裔': 'Hispanic/Latino',
+    '中东裔': 'Middle Eastern'
+  };
+  const ageToEnglish: Record<string, string> = {
+    '小孩': 'child',
+    '青少年': 'teenager',
+    '青年': 'young adult',
+    '成年': 'adult',
+    '成熟': 'mature'
+  };
+
+  // 扩展变量的英文映射
+  const expressionToEnglish: Record<string, string> = {
+    '微笑': 'gentle smile',
+    '自信': 'confident',
+    '严肃': 'serious',
+    '沉思': 'thoughtful',
+    '自然': 'natural relaxed'
+  };
+  const poseToEnglish: Record<string, string> = {
+    '正面': 'frontal view',
+    '3/4侧面': '3/4 view',
+    '侧面': 'profile view',
+    '微仰头': 'slight upward tilt'
+  };
+  const hairStyleToEnglish: Record<string, string> = {
+    '长发': 'long hair',
+    '短发': 'short hair',
+    '马尾': 'ponytail',
+    '盘发': 'hair bun',
+    '自然': 'natural hair'
+  };
+  const clothingStyleToEnglish: Record<string, string> = {
+    '中性色': 'neutral tones clothing',
+    '暖色系': 'warm colored clothing',
+    '冷色系': 'cool colored clothing',
+    '黑白': 'black and white clothing',
+    '鲜艳色彩': 'vibrant colored clothing'
+  };
+
+  // 生成完整提示词（替换变量）
+  const getFullPrompt = (template: TemplateItem, includeExtended = true) => {
+    const ethnicity = ethnicityToEnglish[userModelEthnicity] || userModelEthnicity;
+    const age = ageToEnglish[userModelAge] || userModelAge;
+
+    let prompt = template.prompt
+      .replace(/\{\{ethnicity\}\}/g, ethnicity)
+      .replace(/\{\{age\}\}/g, age);
+
+    // 如果开启扩展变量，添加到模特描述中
+    if (includeExtended) {
+      const expression = expressionToEnglish[userExpression] || userExpression;
+      const pose = poseToEnglish[userPose] || userPose;
+      const hairStyle = hairStyleToEnglish[userHairStyle] || userHairStyle;
+      const clothingStyle = clothingStyleToEnglish[userClothingStyle] || userClothingStyle;
+
+      // 在 [MODEL] 部分后添加扩展属性
+      prompt = prompt.replace(
+        /(\[MODEL\][^\[]*)/,
+        `$1\nExpression: ${expression}, Pose: ${pose}, Hair: ${hairStyle}\n`
+      );
+      // 在 [STYLING] 部分添加服装色系
+      prompt = prompt.replace(
+        /(\[STYLING\][^\[]*)/,
+        `$1\nClothing color palette: ${clothingStyle}\n`
+      );
+    }
+
+    return prompt;
+  };
+
+  // 复制提示词
+  const handleCopyPrompt = async (prompt: string) => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2000);
+    } catch (err) {
+      console.error('复制失败:', err);
+    }
+  };
+
+  // 加载收藏列表
+  const loadFavorites = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const favs = await userApi.getFavorites();
+      setFavoriteTemplates(favs);
+      setFavorites(new Set(favs.map(f => f.id)));
+    } catch (err) {
+      console.error('加载收藏失败:', err);
+    }
+  }, [currentUser]);
+
+  // 切换收藏状态
+  const handleToggleFavorite = async (templateId: string) => {
+    if (!currentUser) {
+      navigate('/login');
+      return;
+    }
+    try {
+      if (favorites.has(templateId)) {
+        await userApi.removeFavorite(templateId);
+        setFavorites(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(templateId);
+          return newSet;
+        });
+      } else {
+        await userApi.addFavorite(templateId);
+        setFavorites(prev => new Set(prev).add(templateId));
+      }
+    } catch (err) {
+      console.error('收藏操作失败:', err);
+    }
+  };
+
+  // 加载提示词历史
+  const loadPromptHistory = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const history = await userApi.getPromptHistory(true); // 只获取成功的
+      setPromptHistory(history);
+    } catch (err) {
+      console.error('加载提示词历史失败:', err);
+    }
+  }, [currentUser]);
+
+  // 提交反馈
+  const handleFeedback = async (rating: 1 | -1) => {
+    if (!lastGeneratedImageId || !currentUser) return;
+    try {
+      await feedbackApi.submit(lastGeneratedImageId, rating);
+      setFeedbackSubmitted(true);
+    } catch (err) {
+      console.error('提交反馈失败:', err);
+    }
+  };
+
+  // 批量生成
+  const handleBatchGenerate = async () => {
+    if (!currentUser) {
+      navigate('/login');
+      return;
+    }
+    if (!imageBase64 || !selectedTemplate) {
+      setError('请先上传眼镜图片并选择模板');
+      return;
+    }
+
+    const selectedCombos = batchCombinations.filter(c => c.selected);
+    if (selectedCombos.length === 0) {
+      setError('请至少选择一个组合');
+      return;
+    }
+
+    setIsBatchGenerating(true);
+    setBatchResults([]);
+    setTaskPollingEnabled(true);
+
+    try {
+      // 构建组合，包含英文变量
+      const combinations = selectedCombos.map(combo => ({
+        ethnicity: ethnicityToEnglish[combo.ethnicity] || combo.ethnicity,
+        age: ageToEnglish[combo.age] || combo.age,
+      }));
+
+      // 提交异步批量任务
+      const res = await taskApi.submitBatch(
+        imageBase64,
+        selectedTemplate.prompt,
+        combinations,
+        userAspectRatio as AspectRatio,
+        selectedTemplate.id,
+        selectedTemplate.name
+      );
+
+      // 添加到本地任务列表
+      setActiveTasks(prev => [{
+        id: res.taskId,
+        type: 'batch',
+        status: 'pending',
+        progress: 0,
+        createdAt: Date.now()
+      }, ...prev]);
+
+      // 提示用户
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || '批量任务提交失败');
+    } finally {
+      setIsBatchGenerating(false);
+    }
+  };
+
+  // 初始化批量组合
+  const initBatchCombinations = () => {
+    const ethnicities = ['东亚人', '欧裔', '非裔'];
+    const ages = ['青年', '成年'];
+    const combos: Array<{ ethnicity: string; age: string; selected: boolean }> = [];
+    ethnicities.forEach(e => {
+      ages.forEach(a => {
+        combos.push({ ethnicity: e, age: a, selected: false });
+      });
+    });
+    setBatchCombinations(combos);
+  };
 
   // 用户历史记录
   const [userHistory, setUserHistory] = useState<GeneratedImage[]>([]);
@@ -150,12 +422,41 @@ const App: React.FC = () => {
     loadTags();
   }, [loadTemplates, loadTags]);
 
-  // 当用户登录后加载历史记录
+  // 当用户登录后加载历史记录、收藏、提示词历史
   useEffect(() => {
     if (currentUser) {
       loadUserHistory();
+      loadFavorites();
+      loadPromptHistory();
     }
-  }, [currentUser, loadUserHistory]);
+  }, [currentUser, loadUserHistory, loadFavorites, loadPromptHistory]);
+
+  // 任务轮询：定期检查活跃任务状态
+  useEffect(() => {
+    if (!currentUser || !taskPollingEnabled) return;
+
+    const pollTasks = async () => {
+      try {
+        const { tasks } = await taskApi.getTasks(true);  // 只获取活跃任务
+        setActiveTasks(tasks as TaskItem[]);
+
+        // 如果有任务完成，刷新历史记录
+        const hasCompleted = tasks.some((t: any) => t.status === 'completed');
+        if (hasCompleted) {
+          loadUserHistory();
+        }
+      } catch (err) {
+        console.error('任务轮询失败:', err);
+      }
+    };
+
+    // 立即执行一次
+    pollTasks();
+
+    // 每5秒轮询一次
+    const interval = setInterval(pollTasks, 5000);
+    return () => clearInterval(interval);
+  }, [currentUser, taskPollingEnabled, loadUserHistory]);
 
   // 普通用户登录
   const handleUserLogin = async (username: string, password: string): Promise<User> => {
@@ -252,53 +553,8 @@ const App: React.FC = () => {
     }
   };
 
-  const handleApplyTemplate = (template: TemplateItem) => {
-    if (!imageBase64) {
-      navigate('/');
-      setError("请先上传您的眼镜图片");
-      return;
-    }
-    // 设置选中的模板并初始化变量值
-    setSelectedTemplate(template);
-    const initialValues: Record<string, string> = {};
-    template.variables?.forEach(v => {
-      initialValues[v.key] = v.defaultValue || '';
-    });
-    setTemplateVariableValues(initialValues);
-    setMode(AppMode.PRESET_STYLES);
-    navigate('/');
-  };
-
-  // 使用模板生成
-  const handleGenerateFromTemplate = async () => {
-    if (!currentUser) {
-      setError('请先登录后再生成图片');
-      navigate('/login');
-      return;
-    }
-    if (!selectedTemplate || !imageBase64) return;
-
-    setIsGenerating(true);
-    setError(null);
-    try {
-      const url = await generateApi.fromTemplate(
-        imageBase64,
-        selectedTemplate.id,
-        templateVariableValues
-      );
-      setGeneratedImage(url);
-      setMode(AppMode.RESULT);
-      navigate('/');
-      loadUserHistory();
-    } catch (err: any) {
-      setError(err.message || '模板生成失败');
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
   // 使用自定义提示词生成（用户可编辑后直接生成）
-  const handleGenerateWithPrompt = async (customPrompt: string) => {
+  const handleGenerateWithPrompt = async (customPrompt: string, aspectRatio?: string) => {
     if (!currentUser) {
       setError('请先登录后再生成图片');
       navigate('/login');
@@ -314,27 +570,32 @@ const App: React.FC = () => {
     navigate('/');
     setMode(AppMode.RESULT);
 
+    // 开启任务轮询
+    setTaskPollingEnabled(true);
+
     try {
-      // 直接调用后端模板生成API，使用自定义提示词
-      const response = await fetch('/api/generate/template', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('lyra_auth_token')}`
-        },
-        body: JSON.stringify({
-          imageBase64,
-          templateId: selectedTemplate?.id || 'custom',
-          variableValues: {},
-          customPrompt  // 后端需要支持这个参数
-        })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
-      setGeneratedImage(data.imageUrl);
-      loadUserHistory();
+      // 提交异步任务
+      const res = await taskApi.submitGenerate(
+        imageBase64,
+        customPrompt,
+        aspectRatio || userAspectRatio,
+        selectedTemplate?.id || 'custom',
+        selectedTemplate?.name
+      );
+
+      // 添加到本地任务列表以立即显示
+      setActiveTasks(prev => [{
+        id: res.taskId,
+        type: 'generate',
+        status: 'pending',
+        progress: 0,
+        createdAt: Date.now()
+      }, ...prev]);
+
+      // 提示用户
+      // setError(null); // 使用Error显示消息其实不太好，最好有个Toast，这里暂时不做改动
     } catch (err: any) {
-      setError(err.message || '生成失败');
+      setError(err.message || '任务提交失败');
     } finally {
       setIsGenerating(false);
     }
@@ -389,18 +650,39 @@ const App: React.FC = () => {
 
     setIsGenerating(true);
     setError(null);
+    // 开启任务轮询
+    setTaskPollingEnabled(true);
+
     try {
-      const url = await generateApi.eyewear(imageBase64, '1K', modelConfig);
-      setGeneratedImage(url);
+      // 提交异步任务
+      // 注意：自定义配置模式下没有 templateId，prompt 由后端根据 config 生成
+      const res = await taskApi.submitGenerate(
+        imageBase64,
+        '', // prompt 为空，后端根据 modelConfig 生成
+        modelConfig.aspectRatio || '3:4',
+        'custom', // 标记为 custom
+        'Custom Generation',
+        undefined,
+        modelConfig,
+        userImageQuality
+      );
+
+      // 添加到本地任务列表
+      setActiveTasks(prev => [{
+        id: res.taskId,
+        type: 'generate',
+        status: 'pending',
+        progress: 0,
+        createdAt: Date.now()
+      }, ...prev]);
+
       setMode(AppMode.RESULT);
-      // 刷新历史记录
-      loadUserHistory();
     } catch (err: any) {
       if (err.message?.includes('未授权') || err.message?.includes('过期')) {
         setCurrentUser(null);
         navigate('/login');
       }
-      setError(err.message || "渲染失败，请检查配置。");
+      setError(err.message || "任务提交失败，请检查配置。");
     } finally {
       setIsGenerating(false);
     }
@@ -480,20 +762,31 @@ const App: React.FC = () => {
           ))}
         </div>
 
-        {/* 模板详情弹窗 */}
+        {/* 模板详情弹窗 - 增强版 */}
         {showTemplateDetail && selectedTemplate && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6" onClick={() => setShowTemplateDetail(false)}>
-            <div className="bg-zinc-900 rounded-[2rem] max-w-2xl w-full max-h-[90vh] overflow-y-auto p-8 space-y-6" onClick={e => e.stopPropagation()}>
-              <div className="flex items-start gap-6">
-                <img src={selectedTemplate.imageUrl} className="w-32 h-40 object-cover rounded-2xl" />
-                <div className="flex-1 space-y-2">
-                  <h3 className="text-2xl font-serif italic text-white">{selectedTemplate.name}</h3>
-                  <p className="text-zinc-500 text-sm">{selectedTemplate.description}</p>
-                  <div className="flex flex-wrap gap-2 pt-2">
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => { setShowTemplateDetail(false); setIsBatchMode(false); setIsEditMode(false); }}>
+            <div className="bg-zinc-900 rounded-[2rem] max-w-3xl w-full max-h-[95vh] overflow-y-auto p-6 space-y-5" onClick={e => e.stopPropagation()}>
+              {/* 头部：模板信息 + 收藏按钮 */}
+              <div className="flex items-start gap-4">
+                <img src={selectedTemplate.imageUrl} className="w-28 h-36 object-cover rounded-2xl flex-shrink-0" />
+                <div className="flex-1 min-w-0 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="text-xl font-serif italic text-white truncate">{selectedTemplate.name}</h3>
+                    <button
+                      onClick={() => handleToggleFavorite(selectedTemplate.id)}
+                      className={`p-2 rounded-xl transition-all flex-shrink-0 ${favorites.has(selectedTemplate.id) ? 'bg-pink-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-pink-400'}`}
+                    >
+                      <svg className="w-5 h-5" fill={favorites.has(selectedTemplate.id) ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                      </svg>
+                    </button>
+                  </div>
+                  <p className="text-zinc-500 text-xs line-clamp-2">{selectedTemplate.description}</p>
+                  <div className="flex flex-wrap gap-1.5">
                     {selectedTemplate.tags?.map(tagId => {
                       const tag = allTags.find(t => t.id === tagId);
                       return tag ? (
-                        <span key={tagId} className="px-3 py-1 rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: tag.color }}>
+                        <span key={tagId} className="px-2 py-0.5 rounded-full text-[8px] font-bold text-white" style={{ backgroundColor: tag.color }}>
                           {tag.name}
                         </span>
                       ) : null;
@@ -502,40 +795,262 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">提示词 (可修改)</label>
-                <textarea
-                  value={editablePrompt}
-                  onChange={(e) => setEditablePrompt(e.target.value)}
-                  rows={6}
-                  className="w-full px-4 py-3 bg-zinc-800 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20 resize-none"
-                />
+              {/* 模式切换标签 */}
+              <div className="flex bg-zinc-800/50 p-1 rounded-xl">
+                <button
+                  onClick={() => { setIsBatchMode(false); setIsEditMode(false); }}
+                  className={`flex-1 py-2 rounded-lg text-[10px] font-bold transition-all ${!isBatchMode && !isEditMode ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}
+                >
+                  单张生成
+                </button>
+                <button
+                  onClick={() => { setIsBatchMode(true); setIsEditMode(false); initBatchCombinations(); }}
+                  className={`flex-1 py-2 rounded-lg text-[10px] font-bold transition-all ${isBatchMode ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-white'}`}
+                >
+                  批量生成
+                </button>
+                <button
+                  onClick={() => { setIsEditMode(true); setIsBatchMode(false); setEditedPrompt(getFullPrompt(selectedTemplate)); }}
+                  className={`flex-1 py-2 rounded-lg text-[10px] font-bold transition-all ${isEditMode ? 'bg-purple-600 text-white' : 'text-zinc-400 hover:text-white'}`}
+                >
+                  编辑提示词
+                </button>
               </div>
 
-              <div className="flex gap-4">
-                <button
-                  onClick={() => setShowTemplateDetail(false)}
-                  className="flex-1 py-4 rounded-2xl bg-zinc-800 text-zinc-400 text-[10px] font-black uppercase tracking-widest hover:bg-zinc-700 transition-colors"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={() => {
-                    if (!imageBase64) {
-                      setShowTemplateDetail(false);
-                      navigate('/');
-                      setError('请先上传您的眼镜图片');
-                      return;
-                    }
-                    // 使用编辑后的提示词生成
-                    setShowTemplateDetail(false);
-                    handleGenerateWithPrompt(editablePrompt);
-                  }}
-                  className="flex-1 py-4 rounded-2xl bg-white text-black text-[10px] font-black uppercase tracking-widest hover:bg-zinc-200 transition-colors"
-                >
-                  立即生成
-                </button>
-              </div>
+              {/* 批量生成模式 */}
+              {isBatchMode && (
+                <div className="space-y-4 p-4 bg-blue-900/20 border border-blue-500/20 rounded-2xl">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] text-blue-400 uppercase tracking-widest font-black">选择组合 (最多5个)</label>
+                    <span className="text-[10px] text-zinc-500">
+                      已选 {batchCombinations.filter(c => c.selected).length}/5
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {batchCombinations.map((combo, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          const selected = batchCombinations.filter(c => c.selected).length;
+                          if (!combo.selected && selected >= 5) return;
+                          setBatchCombinations(prev => prev.map((c, i) => i === idx ? { ...c, selected: !c.selected } : c));
+                        }}
+                        className={`p-3 rounded-xl text-left transition-all ${combo.selected ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
+                      >
+                        <p className="text-[10px] font-bold">{combo.ethnicity}</p>
+                        <p className="text-[9px] opacity-70">{combo.age}</p>
+                      </button>
+                    ))}
+                  </div>
+                  <Button
+                    onClick={handleBatchGenerate}
+                    isLoading={isBatchGenerating}
+                    className="w-full h-12 rounded-xl bg-blue-600 text-white text-[10px] font-black"
+                  >
+                    {isBatchGenerating ? '批量生成中...' : `批量生成 ${batchCombinations.filter(c => c.selected).length} 张`}
+                  </Button>
+                  {batchResults.length > 0 && (
+                    <div className="grid grid-cols-3 gap-2 mt-4">
+                      {batchResults.map((r, i) => (
+                        <img key={i} src={r.imageUrl} className="w-full aspect-[3/4] object-cover rounded-xl" />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 编辑提示词模式 */}
+              {isEditMode && (
+                <div className="space-y-4 p-4 bg-purple-900/20 border border-purple-500/20 rounded-2xl">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] text-purple-400 uppercase tracking-widest font-black">编辑提示词</label>
+                    <button
+                      onClick={() => setEditedPrompt(getFullPrompt(selectedTemplate))}
+                      className="text-[9px] text-zinc-500 hover:text-white"
+                    >
+                      重置
+                    </button>
+                  </div>
+                  <textarea
+                    value={editedPrompt}
+                    onChange={(e) => setEditedPrompt(e.target.value)}
+                    rows={10}
+                    className="w-full px-4 py-3 bg-zinc-800 border border-white/5 rounded-xl text-zinc-300 text-xs font-mono focus:outline-none focus:border-purple-500/50 resize-none"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleCopyPrompt(editedPrompt)}
+                      className={`flex-1 py-3 rounded-xl text-[10px] font-bold transition-all ${promptCopied ? 'bg-green-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
+                    >
+                      {promptCopied ? '✓ 已复制' : '复制提示词'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!imageBase64) {
+                          setError('请先上传眼镜图片');
+                          return;
+                        }
+                        setShowTemplateDetail(false);
+                        setIsEditMode(false);
+                        handleGenerateWithPrompt(editedPrompt, userAspectRatio);
+                      }}
+                      className="flex-1 py-3 rounded-xl bg-purple-600 text-white text-[10px] font-bold hover:bg-purple-500"
+                    >
+                      使用编辑后的提示词生成
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 单张生成模式 - 常规选项 */}
+              {!isBatchMode && !isEditMode && (
+                <>
+                  {/* 基础模特选项 */}
+                  <div className="space-y-3">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">基础选项</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-zinc-400 font-bold">族裔</label>
+                        <select value={userModelEthnicity} onChange={(e) => setUserModelEthnicity(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
+                          <option value="东亚人">东亚人</option>
+                          <option value="东南亚人">东南亚人</option>
+                          <option value="南亚人">南亚人</option>
+                          <option value="欧裔">欧裔</option>
+                          <option value="非裔">非裔</option>
+                          <option value="拉丁裔">拉丁裔</option>
+                          <option value="中东裔">中东裔</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-zinc-400 font-bold">年龄</label>
+                        <select value={userModelAge} onChange={(e) => setUserModelAge(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
+                          <option value="小孩">小孩</option>
+                          <option value="青少年">青少年</option>
+                          <option value="青年">青年</option>
+                          <option value="成年">成年</option>
+                          <option value="成熟">成熟</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 扩展模特选项 */}
+                  <details className="group">
+                    <summary className="text-[10px] text-zinc-500 uppercase tracking-widest font-black cursor-pointer hover:text-zinc-400 flex items-center gap-2">
+                      <span>高级选项</span>
+                      <svg className="w-3 h-3 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                    </summary>
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-zinc-400 font-bold">表情</label>
+                        <select value={userExpression} onChange={(e) => setUserExpression(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
+                          {EXTENDED_VARIABLES.expression.options.map(opt => (
+                            <option key={opt.zh} value={opt.zh}>{opt.zh}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-zinc-400 font-bold">视角</label>
+                        <select value={userPose} onChange={(e) => setUserPose(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
+                          {EXTENDED_VARIABLES.pose.options.map(opt => (
+                            <option key={opt.zh} value={opt.zh}>{opt.zh}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-zinc-400 font-bold">发型</label>
+                        <select value={userHairStyle} onChange={(e) => setUserHairStyle(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
+                          {EXTENDED_VARIABLES.hairStyle.options.map(opt => (
+                            <option key={opt.zh} value={opt.zh}>{opt.zh}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-zinc-400 font-bold">服装色系</label>
+                        <select value={userClothingStyle} onChange={(e) => setUserClothingStyle(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
+                          {EXTENDED_VARIABLES.clothingStyle.options.map(opt => (
+                            <option key={opt.zh} value={opt.zh}>{opt.zh}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </details>
+
+                  {/* 图像选项 */}
+                  <div className="space-y-3">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">图像选项</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-zinc-400 font-bold">清晰度</label>
+                        <select value={userImageQuality} onChange={(e) => setUserImageQuality(e.target.value as '1K' | '2K' | '4K')} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
+                          <option value="1K">1K</option>
+                          <option value="2K">2K</option>
+                          <option value="4K">4K</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] text-zinc-400 font-bold">画面比例</label>
+                        <select value={userAspectRatio} onChange={(e) => setUserAspectRatio(e.target.value as any)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
+                          <option value="1:1">1:1</option>
+                          <option value="3:4">3:4</option>
+                          <option value="4:3">4:3</option>
+                          <option value="9:16">9:16</option>
+                          <option value="16:9">16:9</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 提示词预览 */}
+                  <details className="group">
+                    <summary className="text-[10px] text-zinc-500 uppercase tracking-widest font-black cursor-pointer hover:text-zinc-400 flex items-center gap-2">
+                      <span>完整提示词预览</span>
+                      <svg className="w-3 h-3 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                    </summary>
+                    <div className="mt-3 relative">
+                      <pre className="px-4 py-3 bg-zinc-800/50 border border-white/5 rounded-xl text-zinc-300 text-[10px] leading-relaxed max-h-40 overflow-y-auto whitespace-pre-wrap font-mono">
+                        {getFullPrompt(selectedTemplate)}
+                      </pre>
+                      <button
+                        onClick={() => handleCopyPrompt(getFullPrompt(selectedTemplate))}
+                        className={`absolute top-2 right-2 px-2 py-1 rounded-lg text-[8px] font-bold transition-all ${promptCopied ? 'bg-green-600 text-white' : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'}`}
+                      >
+                        {promptCopied ? '✓' : '复制'}
+                      </button>
+                    </div>
+                  </details>
+                </>
+              )}
+
+              {/* 底部操作按钮 */}
+              {!isBatchMode && (
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => { setShowTemplateDetail(false); setIsEditMode(false); }}
+                    className="flex-1 py-3.5 rounded-2xl bg-zinc-800 text-zinc-400 text-[10px] font-black uppercase tracking-widest hover:bg-zinc-700 transition-colors"
+                  >
+                    取消
+                  </button>
+                  {!isEditMode && (
+                    <button
+                      onClick={() => {
+                        if (!imageBase64) {
+                          setShowTemplateDetail(false);
+                          navigate('/');
+                          setError('请先上传您的眼镜图片');
+                          return;
+                        }
+                        const finalPrompt = getFullPrompt(selectedTemplate);
+                        setShowTemplateDetail(false);
+                        handleGenerateWithPrompt(finalPrompt, userAspectRatio);
+                      }}
+                      className="flex-1 py-3.5 rounded-2xl bg-white text-black text-[10px] font-black uppercase tracking-widest hover:bg-zinc-200 transition-colors"
+                    >
+                      立即生成
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -730,11 +1245,11 @@ const App: React.FC = () => {
                 />
               </div>
 
-              {/* 提示词 */}
+              {/* 原始提示词输入 */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">
-                    提示词 Prompt <span className="text-zinc-700">(支持 {'{{变量名}}'} 占位符)</span>
+                    原始提示词 <span className="text-zinc-700">(粘贴后点击AI优化生成男女两个版本)</span>
                   </label>
                   <button
                     onClick={async () => {
@@ -743,6 +1258,7 @@ const App: React.FC = () => {
                         return;
                       }
                       setIsGenerating(true);
+                      setShowOptimizedPrompts(false);
                       try {
                         const response = await fetch('/api/generate/optimize-prompt', {
                           method: 'POST',
@@ -754,7 +1270,15 @@ const App: React.FC = () => {
                         });
                         const data = await response.json();
                         if (!response.ok) throw new Error(data.error);
-                        setNewTemplatePrompt(data.optimizedPrompt);
+                        // 新格式返回 { female, male }
+                        if (data.optimizedPrompt && typeof data.optimizedPrompt === 'object') {
+                          setOptimizedPrompts(data.optimizedPrompt);
+                          setShowOptimizedPrompts(true);
+                        } else if (data.optimizedPrompt) {
+                          // 兼容旧格式
+                          setOptimizedPrompts({ female: data.optimizedPrompt, male: null });
+                          setShowOptimizedPrompts(true);
+                        }
                       } catch (err: any) {
                         setError(err.message || 'AI优化失败');
                       } finally {
@@ -764,17 +1288,160 @@ const App: React.FC = () => {
                     disabled={isGenerating}
                     className="px-4 py-2 rounded-xl text-[10px] font-bold bg-gradient-to-r from-purple-600 to-blue-600 text-white hover:opacity-80 transition-opacity disabled:opacity-50"
                   >
-                    {isGenerating ? '优化中...' : '✨ AI 优化'}
+                    {isGenerating ? '生成中...' : '✨ AI 生成男女版本'}
                   </button>
                 </div>
                 <textarea
                   value={newTemplatePrompt}
-                  onChange={(e) => setNewTemplatePrompt(e.target.value)}
-                  rows={6}
+                  onChange={(e) => {
+                    setNewTemplatePrompt(e.target.value);
+                    setShowOptimizedPrompts(false);
+                  }}
+                  rows={4}
                   className="w-full px-4 py-3 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20 resize-none"
-                  placeholder="例如：东亚女性模特，{{title}}标题，都市精英风格，自然午后暖阳..."
+                  placeholder="粘贴你的原始prompt，AI会自动生成男女两个版本..."
                 />
               </div>
+
+              {/* AI生成的男女版本 */}
+              {showOptimizedPrompts && (
+                <div className="space-y-4 p-4 bg-zinc-800/50 rounded-2xl border border-white/5">
+                  <h5 className="text-[10px] font-black uppercase tracking-widest text-green-400">✓ AI 已生成两个版本</h5>
+
+                  {/* 女性版本 */}
+                  {optimizedPrompts.female && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] text-pink-400 uppercase tracking-widest font-black">👩 女性版本</label>
+                        <button
+                          onClick={async () => {
+                            if (!newTemplateImage) {
+                              setError('请先上传图片');
+                              return;
+                            }
+                            try {
+                              const newTpl: TemplateItem = {
+                                id: Date.now().toString() + '_female',
+                                imageUrl: newTemplateImage,
+                                name: (newTemplateName || '新模板') + ' (女)',
+                                description: newTemplateDesc || '',
+                                prompt: optimizedPrompts.female!,
+                                tags: newTemplateTags,
+                                variables: []
+                              };
+                              await templateApi.create(newTpl);
+                              await loadTemplates();
+                              alert('女性版本已发布');
+                            } catch (err: any) {
+                              setError(err.message || '发布失败');
+                            }
+                          }}
+                          className="px-3 py-1 rounded-lg text-[9px] font-bold bg-pink-600 text-white hover:bg-pink-500"
+                        >
+                          发布女性版本
+                        </button>
+                      </div>
+                      <textarea
+                        value={optimizedPrompts.female}
+                        onChange={(e) => setOptimizedPrompts(prev => ({ ...prev, female: e.target.value }))}
+                        rows={5}
+                        className="w-full px-3 py-2 bg-zinc-900 border border-pink-900/30 rounded-xl text-white text-xs focus:outline-none focus:border-pink-500/50 resize-none"
+                      />
+                    </div>
+                  )}
+
+                  {/* 男性版本 */}
+                  {optimizedPrompts.male && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] text-blue-400 uppercase tracking-widest font-black">👨 男性版本</label>
+                        <button
+                          onClick={async () => {
+                            if (!newTemplateImage) {
+                              setError('请先上传图片');
+                              return;
+                            }
+                            try {
+                              const newTpl: TemplateItem = {
+                                id: Date.now().toString() + '_male',
+                                imageUrl: newTemplateImage,
+                                name: (newTemplateName || '新模板') + ' (男)',
+                                description: newTemplateDesc || '',
+                                prompt: optimizedPrompts.male!,
+                                tags: newTemplateTags,
+                                variables: []
+                              };
+                              await templateApi.create(newTpl);
+                              await loadTemplates();
+                              alert('男性版本已发布');
+                            } catch (err: any) {
+                              setError(err.message || '发布失败');
+                            }
+                          }}
+                          className="px-3 py-1 rounded-lg text-[9px] font-bold bg-blue-600 text-white hover:bg-blue-500"
+                        >
+                          发布男性版本
+                        </button>
+                      </div>
+                      <textarea
+                        value={optimizedPrompts.male}
+                        onChange={(e) => setOptimizedPrompts(prev => ({ ...prev, male: e.target.value }))}
+                        rows={5}
+                        className="w-full px-3 py-2 bg-zinc-900 border border-blue-900/30 rounded-xl text-white text-xs focus:outline-none focus:border-blue-500/50 resize-none"
+                      />
+                    </div>
+                  )}
+
+                  {/* 同时发布两个版本 */}
+                  {optimizedPrompts.female && optimizedPrompts.male && (
+                    <button
+                      onClick={async () => {
+                        if (!newTemplateImage) {
+                          setError('请先上传图片');
+                          return;
+                        }
+                        try {
+                          // 发布女性版本
+                          await templateApi.create({
+                            id: Date.now().toString() + '_female',
+                            imageUrl: newTemplateImage,
+                            name: (newTemplateName || '新模板') + ' (女)',
+                            description: newTemplateDesc || '',
+                            prompt: optimizedPrompts.female!,
+                            tags: newTemplateTags,
+                            variables: []
+                          });
+                          // 发布男性版本
+                          await templateApi.create({
+                            id: (Date.now() + 1).toString() + '_male',
+                            imageUrl: newTemplateImage,
+                            name: (newTemplateName || '新模板') + ' (男)',
+                            description: newTemplateDesc || '',
+                            prompt: optimizedPrompts.male!,
+                            tags: newTemplateTags,
+                            variables: []
+                          });
+                          await loadTemplates();
+                          // 重置表单
+                          setNewTemplateImage(null);
+                          setNewTemplateName('');
+                          setNewTemplateDesc('');
+                          setNewTemplatePrompt('');
+                          setNewTemplateTags([]);
+                          setOptimizedPrompts({ female: null, male: null });
+                          setShowOptimizedPrompts(false);
+                          alert('两个版本都已发布');
+                        } catch (err: any) {
+                          setError(err.message || '发布失败');
+                        }
+                      }}
+                      className="w-full py-3 rounded-xl text-[10px] font-bold bg-gradient-to-r from-pink-600 to-blue-600 text-white hover:opacity-90"
+                    >
+                      同时发布男女两个版本
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             <Button onClick={handleAdminAddTemplate} className="w-full h-16 rounded-2xl">发布至模板广场</Button>
@@ -1036,16 +1703,48 @@ const App: React.FC = () => {
                   )}
                   {mode === AppMode.MODEL_CONFIG && renderConfig()}
                   {mode === AppMode.RESULT && generatedImage && (
-                    <div className="space-y-10 animate-fade-in">
-                      <h2 className="text-6xl font-serif italic text-white">渲染完成</h2>
+                    <div className="space-y-8 animate-fade-in">
+                      <h2 className="text-5xl font-serif italic text-white">渲染完成</h2>
+
+                      {/* 反馈区域 */}
+                      {lastGeneratedImageId && currentUser && (
+                        <div className="p-6 bg-zinc-900/50 rounded-2xl border border-white/5 space-y-4">
+                          <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">生成效果如何？</p>
+                          {!feedbackSubmitted ? (
+                            <div className="flex gap-3">
+                              <button
+                                onClick={() => handleFeedback(1)}
+                                className="flex-1 py-4 rounded-xl bg-green-900/30 border border-green-500/20 text-green-400 text-sm font-bold hover:bg-green-900/50 transition-all flex items-center justify-center gap-2"
+                              >
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5" />
+                                </svg>
+                                满意
+                              </button>
+                              <button
+                                onClick={() => handleFeedback(-1)}
+                                className="flex-1 py-4 rounded-xl bg-red-900/30 border border-red-500/20 text-red-400 text-sm font-bold hover:bg-red-900/50 transition-all flex items-center justify-center gap-2"
+                              >
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.096c.5 0 .905-.405.905-.904 0-.715.211-1.413.608-2.008L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5" />
+                                </svg>
+                                不满意
+                              </button>
+                            </div>
+                          ) : (
+                            <p className="text-center text-green-400 text-sm font-bold py-2">感谢您的反馈！</p>
+                          )}
+                        </div>
+                      )}
+
                       <div className="space-y-4">
                         <Button onClick={() => {
                           const link = document.createElement('a');
                           link.href = generatedImage!;
                           link.download = `lyra-shoot.png`;
                           link.click();
-                        }} className="w-full h-24 rounded-[2.5rem] bg-white text-black font-black text-sm">导出商业级原图</Button>
-                        <Button variant="outline" onClick={() => setMode(AppMode.DASHBOARD)} className="w-full h-24 rounded-[2.5rem] text-sm">重新配置</Button>
+                        }} className="w-full h-20 rounded-[2rem] bg-white text-black font-black text-sm">导出商业级原图</Button>
+                        <Button variant="outline" onClick={() => { setMode(AppMode.DASHBOARD); setFeedbackSubmitted(false); setLastGeneratedImageId(null); }} className="w-full h-20 rounded-[2rem] text-sm">重新配置</Button>
                       </div>
                     </div>
                   )}
@@ -1055,6 +1754,73 @@ const App: React.FC = () => {
           </Routes>
         </div>
       </main>
+
+      {/* 任务队列浮窗 */}
+      {currentUser && (activeTasks.length > 0 || showTaskQueue) && (
+        <div className={`fixed bottom-6 right-6 z-50 transition-all duration-300 ${showTaskQueue ? 'w-80' : 'w-auto'}`}>
+          <div className="bg-zinc-900 border border-white/10 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-xl">
+            {/* 标题栏 */}
+            <div
+              className="p-4 flex items-center justify-between cursor-pointer bg-white/5 hover:bg-white/10 transition-colors"
+              onClick={() => setShowTaskQueue(!showTaskQueue)}
+            >
+              <div className="flex items-center gap-3">
+                {activeTasks.length > 0 ? (
+                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                ) : (
+                  <div className="w-2 h-2 rounded-full bg-zinc-500" />
+                )}
+                <span className="text-xs font-bold text-white">
+                  任务队列 ({activeTasks.length})
+                </span>
+              </div>
+              <div className={`transform transition-transform ${showTaskQueue ? 'rotate-180' : ''}`}>
+                <svg className="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                </svg>
+              </div>
+            </div>
+
+            {/* 列表 */}
+            {showTaskQueue && (
+              <div className="max-h-64 overflow-y-auto p-2 space-y-2">
+                {activeTasks.length === 0 ? (
+                  <div className="text-center py-8 text-zinc-500 text-[10px]">
+                    暂无活动任务
+                  </div>
+                ) : (
+                  activeTasks.map(task => (
+                    <div key={task.id} className="p-3 bg-black/40 rounded-xl flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                        {task.status === 'processing' ? (
+                          <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                        ) : task.status === 'completed' ? (
+                          <div className="text-green-500">✓</div>
+                        ) : task.status === 'failed' ? (
+                          <div className="text-red-500">!</div>
+                        ) : (
+                          <div className="text-zinc-500">...</div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[10px] font-bold text-zinc-300 truncate">
+                          {task.type === 'batch' ? '批量生成任务' : 'AI 生成任务'}
+                        </div>
+                        <div className="text-[9px] text-zinc-500 flex justify-between">
+                          <span>{task.status === 'pending' ? '排队中...' :
+                            task.status === 'processing' ? '正在处理...' :
+                              task.status === 'completed' ? '已完成' : '失败'}</span>
+                          <span>{new Date(task.createdAt).toLocaleTimeString()}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {error && <div className="fixed bottom-10 left-1/2 -translate-x-1/2 ios-glass px-10 py-6 rounded-3xl text-red-400 text-[10px] font-black z-[500] uppercase tracking-widest border-red-900/20">{error}</div>}
     </div>

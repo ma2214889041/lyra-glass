@@ -1,4 +1,4 @@
-import { ModelConfig, PosterConfig, TemplateItem, ImageSize, AspectRatio, AppMode, User, GeneratedImage, Tag } from '../types';
+import { ModelConfig, PosterConfig, TemplateItem, ImageSize, AspectRatio, AppMode, User, GeneratedImage, Tag, PromptHistoryItem, FavoriteTemplate } from '../types';
 
 const API_BASE = '/api';
 
@@ -227,6 +227,222 @@ export const userApi = {
     const result = await request<{ success: boolean; images: GeneratedImage[] }>('/user/history');
     return result.images;
   },
+
+  // 收藏相关
+  getFavorites: async (): Promise<FavoriteTemplate[]> => {
+    const result = await request<{ success: boolean; favorites: FavoriteTemplate[] }>('/user/favorites');
+    return result.favorites;
+  },
+
+  addFavorite: async (templateId: string): Promise<boolean> => {
+    const result = await request<{ success: boolean; added: boolean }>(`/user/favorites/${templateId}`, {
+      method: 'POST',
+    });
+    return result.added;
+  },
+
+  removeFavorite: async (templateId: string): Promise<boolean> => {
+    const result = await request<{ success: boolean; removed: boolean }>(`/user/favorites/${templateId}`, {
+      method: 'DELETE',
+    });
+    return result.removed;
+  },
+
+  checkFavorite: async (templateId: string): Promise<boolean> => {
+    const result = await request<{ success: boolean; isFavorited: boolean }>(`/user/favorites/${templateId}/check`);
+    return result.isFavorited;
+  },
+
+  // 提示词历史
+  getPromptHistory: async (successfulOnly?: boolean): Promise<PromptHistoryItem[]> => {
+    const query = successfulOnly ? '?successful=true' : '';
+    const result = await request<{ success: boolean; history: PromptHistoryItem[] }>(`/user/prompt-history${query}`);
+    return result.history;
+  },
+
+  deletePromptHistory: async (id: number): Promise<boolean> => {
+    const result = await request<{ success: boolean; deleted: boolean }>(`/user/prompt-history/${id}`, {
+      method: 'DELETE',
+    });
+    return result.deleted;
+  },
+};
+
+// ========== 反馈 API ==========
+
+export const feedbackApi = {
+  submit: async (imageId: string, rating: 1 | -1): Promise<void> => {
+    await request(`/feedback/${imageId}`, {
+      method: 'POST',
+      body: JSON.stringify({ rating }),
+    });
+  },
+
+  getStats: async (imageId: string): Promise<{ likes: number; dislikes: number }> => {
+    const result = await request<{ success: boolean; likes: number; dislikes: number }>(`/feedback/${imageId}`);
+    return { likes: result.likes, dislikes: result.dislikes };
+  },
+
+  getUserRating: async (imageId: string): Promise<number> => {
+    const result = await request<{ success: boolean; rating: number }>(`/feedback/${imageId}/user`);
+    return result.rating;
+  },
+
+  getTemplateStats: async (templateId: string): Promise<{
+    likes: number;
+    dislikes: number;
+    total: number;
+    satisfaction: number | null;
+    favoriteCount: number;
+  }> => {
+    return request(`/templates/${templateId}/stats`);
+  },
+};
+
+// ========== 批量生成 API ==========
+
+interface BatchCombination {
+  ethnicity: string;
+  age: string;
+  expression?: string;
+  pose?: string;
+  [key: string]: string | undefined;
+}
+
+interface BatchResult {
+  imageId: string;
+  imageUrl: string;
+  combination: BatchCombination;
+}
+
+interface BatchGenerateResponse {
+  success: boolean;
+  results: BatchResult[];
+  failed: Array<{ index: number; error: string }>;
+  total: number;
+  successCount: number;
+}
+
+export const batchApi = {
+  generate: async (
+    imageBase64: string,
+    templateId: string | null,
+    combinations: BatchCombination[],
+    aspectRatio?: AspectRatio,
+    basePrompt?: string
+  ): Promise<BatchGenerateResponse> => {
+    return request<BatchGenerateResponse>('/generate/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        imageBase64,
+        templateId: templateId || 'custom',
+        combinations,
+        aspectRatio,
+        basePrompt,
+      }),
+    });
+  },
+};
+
+// ========== 异步任务 API ==========
+
+interface TaskResponse {
+  success: boolean;
+  taskId: string;
+  status: string;
+  queuePosition: number;
+  message: string;
+  totalImages?: number;
+}
+
+interface Task {
+  id: string;
+  type: 'generate' | 'batch';
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  progress: number;
+  inputData?: any;
+  outputData?: any;
+  errorMessage?: string;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+}
+
+interface QueueStats {
+  pending: number;
+  processing: number;
+  completed: number;
+  failed: number;
+}
+
+export const taskApi = {
+  // 提交异步生成任务
+  submitGenerate: async (
+    imageBase64: string,
+    prompt: string,
+    aspectRatio?: string,
+    templateId?: string,
+    templateName?: string,
+    variableValues?: Record<string, string>,
+    modelConfig?: any,
+    imageQuality?: string
+  ): Promise<TaskResponse> => {
+    return request<TaskResponse>('/tasks/generate', {
+      method: 'POST',
+      body: JSON.stringify({
+        imageBase64,
+        prompt,
+        aspectRatio,
+        templateId,
+        templateName,
+        variableValues,
+        modelConfig,
+        imageQuality
+      })
+    });
+  },
+
+  // 提交异步批量任务
+  submitBatch: async (
+    imageBase64: string,
+    basePrompt: string,
+    combinations: Array<Record<string, string>>,
+    aspectRatio?: string,
+    templateId?: string,
+    templateName?: string
+  ): Promise<TaskResponse> => {
+    return request<TaskResponse>('/tasks/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        imageBase64,
+        basePrompt,
+        combinations,
+        aspectRatio,
+        templateId,
+        templateName
+      })
+    });
+  },
+
+  // 获取任务状态
+  getTask: async (taskId: string): Promise<{ success: boolean; task: Task }> => {
+    return request(`/tasks/${taskId}`);
+  },
+
+  // 获取用户任务列表
+  getTasks: async (activeOnly?: boolean): Promise<{ success: boolean; tasks: Task[] }> => {
+    const query = activeOnly ? '?active=true' : '';
+    return request(`/tasks${query}`);
+  },
+
+  // 获取队列统计
+  getQueueStats: async (): Promise<{
+    success: boolean;
+    queue: QueueStats;
+    processor: { isRunning: boolean; activeWorkers: number; maxWorkers: number };
+  }> => {
+    return request('/tasks/queue/stats');
+  }
 };
 
 // ========== 健康检查 ==========

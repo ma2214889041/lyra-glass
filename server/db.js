@@ -55,6 +55,56 @@ db.exec(`
     expires_at INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    template_id TEXT NOT NULL,
+    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (template_id) REFERENCES templates(id),
+    UNIQUE(user_id, template_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS prompt_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    template_id TEXT,
+    prompt TEXT NOT NULL,
+    variables TEXT DEFAULT '{}',
+    is_successful INTEGER DEFAULT 0,
+    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    image_id TEXT NOT NULL,
+    rating INTEGER NOT NULL CHECK (rating IN (-1, 1)),
+    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (image_id) REFERENCES generated_images(id),
+    UNIQUE(user_id, image_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+    input_data TEXT NOT NULL,
+    output_data TEXT,
+    error_message TEXT,
+    progress INTEGER DEFAULT 0,
+    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+    started_at INTEGER,
+    completed_at INTEGER,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_tasks_user_status ON tasks(user_id, status);
+  CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 `);
 
 // 迁移：为旧表添加新列（如果不存在）
@@ -77,6 +127,9 @@ try {
 } catch (e) { }
 try {
   db.exec(`ALTER TABLE templates ADD COLUMN variables TEXT DEFAULT '[]'`);
+} catch (e) { }
+try {
+  db.exec(`ALTER TABLE generated_images ADD COLUMN prompt TEXT`);
 } catch (e) { }
 
 // 插入默认标签（如果不存在）
@@ -269,10 +322,10 @@ export const sessionDb = {
 export const imageDb = {
   save: (image, userId = null) => {
     const stmt = db.prepare(`
-      INSERT INTO generated_images (id, url, type, config, user_id)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO generated_images (id, url, type, config, user_id, prompt)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(image.id, image.url, image.type, JSON.stringify(image.config || {}), userId);
+    stmt.run(image.id, image.url, image.type, JSON.stringify(image.config || {}), userId, image.prompt || null);
     return { ...image, userId };
   },
 
@@ -282,7 +335,7 @@ export const imageDb = {
 
   getByUserId: (userId, limit = 50) => {
     const rows = db.prepare(`
-      SELECT id, url, type, config, created_at
+      SELECT id, url, type, config, prompt, created_at
       FROM generated_images
       WHERE user_id = ?
       ORDER BY created_at DESC
@@ -293,8 +346,372 @@ export const imageDb = {
       url: row.url,
       type: row.type,
       config: row.config ? JSON.parse(row.config) : null,
+      prompt: row.prompt || null,
       timestamp: row.created_at * 1000
     }));
+  },
+
+  // 更新图片的 prompt 字段
+  updatePrompt: (imageId, prompt) => {
+    const stmt = db.prepare('UPDATE generated_images SET prompt = ? WHERE id = ?');
+    return stmt.run(prompt, imageId).changes > 0;
+  },
+
+  // 获取图片详情（包含反馈）
+  getById: (imageId) => {
+    const row = db.prepare('SELECT * FROM generated_images WHERE id = ?').get(imageId);
+    if (!row) return null;
+    return {
+      id: row.id,
+      url: row.url,
+      type: row.type,
+      config: row.config ? JSON.parse(row.config) : null,
+      prompt: row.prompt || null,
+      userId: row.user_id,
+      timestamp: row.created_at * 1000
+    };
+  }
+};
+
+// 收藏相关操作
+export const favoriteDb = {
+  // 添加收藏
+  add: (userId, templateId) => {
+    try {
+      const stmt = db.prepare('INSERT INTO favorites (user_id, template_id) VALUES (?, ?)');
+      stmt.run(userId, templateId);
+      return true;
+    } catch (e) {
+      // UNIQUE 约束冲突说明已收藏
+      return false;
+    }
+  },
+
+  // 取消收藏
+  remove: (userId, templateId) => {
+    const stmt = db.prepare('DELETE FROM favorites WHERE user_id = ? AND template_id = ?');
+    return stmt.run(userId, templateId).changes > 0;
+  },
+
+  // 检查是否已收藏
+  isFavorited: (userId, templateId) => {
+    const row = db.prepare('SELECT 1 FROM favorites WHERE user_id = ? AND template_id = ?').get(userId, templateId);
+    return !!row;
+  },
+
+  // 获取用户的收藏列表
+  getByUserId: (userId) => {
+    const rows = db.prepare(`
+      SELECT t.*, f.created_at as favorited_at
+      FROM favorites f
+      JOIN templates t ON f.template_id = t.id
+      WHERE f.user_id = ?
+      ORDER BY f.created_at DESC
+    `).all(userId);
+    return rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      imageUrl: row.image_url,
+      prompt: row.prompt || '',
+      tags: JSON.parse(row.tags || '[]'),
+      variables: JSON.parse(row.variables || '[]'),
+      favoritedAt: row.favorited_at * 1000
+    }));
+  },
+
+  // 获取模板的收藏数量
+  getCount: (templateId) => {
+    const row = db.prepare('SELECT COUNT(*) as count FROM favorites WHERE template_id = ?').get(templateId);
+    return row.count;
+  }
+};
+
+// 提示词历史相关操作
+export const promptHistoryDb = {
+  // 保存提示词历史
+  save: (userId, prompt, templateId = null, variables = {}, isSuccessful = false) => {
+    const stmt = db.prepare(`
+      INSERT INTO prompt_history (user_id, template_id, prompt, variables, is_successful)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(userId, templateId, prompt, JSON.stringify(variables), isSuccessful ? 1 : 0);
+    return result.lastInsertRowid;
+  },
+
+  // 标记为成功
+  markSuccessful: (id) => {
+    const stmt = db.prepare('UPDATE prompt_history SET is_successful = 1 WHERE id = ?');
+    return stmt.run(id).changes > 0;
+  },
+
+  // 获取用户的提示词历史
+  getByUserId: (userId, limit = 50) => {
+    const rows = db.prepare(`
+      SELECT * FROM prompt_history
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(userId, limit);
+    return rows.map(row => ({
+      id: row.id,
+      templateId: row.template_id,
+      prompt: row.prompt,
+      variables: JSON.parse(row.variables || '{}'),
+      isSuccessful: row.is_successful === 1,
+      timestamp: row.created_at * 1000
+    }));
+  },
+
+  // 获取成功的提示词历史
+  getSuccessful: (userId, limit = 20) => {
+    const rows = db.prepare(`
+      SELECT * FROM prompt_history
+      WHERE user_id = ? AND is_successful = 1
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(userId, limit);
+    return rows.map(row => ({
+      id: row.id,
+      templateId: row.template_id,
+      prompt: row.prompt,
+      variables: JSON.parse(row.variables || '{}'),
+      timestamp: row.created_at * 1000
+    }));
+  },
+
+  // 删除历史记录
+  delete: (id, userId) => {
+    const stmt = db.prepare('DELETE FROM prompt_history WHERE id = ? AND user_id = ?');
+    return stmt.run(id, userId).changes > 0;
+  }
+};
+
+// 任务队列相关操作
+export const taskDb = {
+  // 创建任务
+  create: (taskId, userId, type, inputData) => {
+    const stmt = db.prepare(`
+      INSERT INTO tasks (id, user_id, type, input_data, status, progress)
+      VALUES (?, ?, ?, ?, 'pending', 0)
+    `);
+    stmt.run(taskId, userId, type, JSON.stringify(inputData));
+    return {
+      id: taskId,
+      userId,
+      type,
+      status: 'pending',
+      progress: 0,
+      inputData,
+      createdAt: Date.now()
+    };
+  },
+
+  // 获取待处理任务（按创建时间排序）
+  getPending: (limit = 10) => {
+    const rows = db.prepare(`
+      SELECT * FROM tasks
+      WHERE status = 'pending'
+      ORDER BY created_at ASC
+      LIMIT ?
+    `).all(limit);
+    return rows.map(row => ({
+      id: row.id,
+      userId: row.user_id,
+      type: row.type,
+      status: row.status,
+      inputData: JSON.parse(row.input_data),
+      createdAt: row.created_at * 1000
+    }));
+  },
+
+  // 开始处理任务
+  startProcessing: (taskId) => {
+    const now = Math.floor(Date.now() / 1000);
+    const stmt = db.prepare(`
+      UPDATE tasks SET status = 'processing', started_at = ?, progress = 10
+      WHERE id = ? AND status = 'pending'
+    `);
+    return stmt.run(now, taskId).changes > 0;
+  },
+
+  // 更新进度
+  updateProgress: (taskId, progress) => {
+    const stmt = db.prepare('UPDATE tasks SET progress = ? WHERE id = ?');
+    return stmt.run(progress, taskId).changes > 0;
+  },
+
+  // 完成任务
+  complete: (taskId, outputData) => {
+    const now = Math.floor(Date.now() / 1000);
+    const stmt = db.prepare(`
+      UPDATE tasks SET status = 'completed', output_data = ?, completed_at = ?, progress = 100
+      WHERE id = ?
+    `);
+    return stmt.run(JSON.stringify(outputData), now, taskId).changes > 0;
+  },
+
+  // 任务失败
+  fail: (taskId, errorMessage) => {
+    const now = Math.floor(Date.now() / 1000);
+    const stmt = db.prepare(`
+      UPDATE tasks SET status = 'failed', error_message = ?, completed_at = ?
+      WHERE id = ?
+    `);
+    return stmt.run(errorMessage, now, taskId).changes > 0;
+  },
+
+  // 获取任务详情
+  getById: (taskId) => {
+    const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!row) return null;
+    return {
+      id: row.id,
+      userId: row.user_id,
+      type: row.type,
+      status: row.status,
+      progress: row.progress,
+      inputData: JSON.parse(row.input_data),
+      outputData: row.output_data ? JSON.parse(row.output_data) : null,
+      errorMessage: row.error_message,
+      createdAt: row.created_at * 1000,
+      startedAt: row.started_at ? row.started_at * 1000 : null,
+      completedAt: row.completed_at ? row.completed_at * 1000 : null
+    };
+  },
+
+  // 获取用户的任务列表
+  getByUserId: (userId, limit = 50) => {
+    const rows = db.prepare(`
+      SELECT * FROM tasks
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(userId, limit);
+    return rows.map(row => ({
+      id: row.id,
+      type: row.type,
+      status: row.status,
+      progress: row.progress,
+      inputData: JSON.parse(row.input_data),
+      outputData: row.output_data ? JSON.parse(row.output_data) : null,
+      errorMessage: row.error_message,
+      createdAt: row.created_at * 1000,
+      startedAt: row.started_at ? row.started_at * 1000 : null,
+      completedAt: row.completed_at ? row.completed_at * 1000 : null
+    }));
+  },
+
+  // 获取用户活跃任务（pending 或 processing）
+  getActiveTasks: (userId) => {
+    const rows = db.prepare(`
+      SELECT * FROM tasks
+      WHERE user_id = ? AND status IN ('pending', 'processing')
+      ORDER BY created_at ASC
+    `).all(userId);
+    return rows.map(row => ({
+      id: row.id,
+      type: row.type,
+      status: row.status,
+      progress: row.progress,
+      inputData: JSON.parse(row.input_data),
+      createdAt: row.created_at * 1000,
+      startedAt: row.started_at ? row.started_at * 1000 : null
+    }));
+  },
+
+  // 获取队列统计
+  getQueueStats: () => {
+    const row = db.prepare(`
+      SELECT
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+      FROM tasks
+    `).get();
+    return {
+      pending: row.pending || 0,
+      processing: row.processing || 0,
+      completed: row.completed || 0,
+      failed: row.failed || 0
+    };
+  },
+
+  // 清理旧任务（保留最近7天）
+  cleanup: (daysToKeep = 7) => {
+    const cutoff = Math.floor(Date.now() / 1000) - (daysToKeep * 24 * 60 * 60);
+    const stmt = db.prepare(`
+      DELETE FROM tasks
+      WHERE status IN ('completed', 'failed') AND completed_at < ?
+    `);
+    return stmt.run(cutoff).changes;
+  },
+
+  // 重置卡住的任务（processing超过10分钟）
+  resetStuckTasks: () => {
+    const cutoff = Math.floor(Date.now() / 1000) - (10 * 60); // 10分钟
+    const stmt = db.prepare(`
+      UPDATE tasks SET status = 'pending', started_at = NULL, progress = 0
+      WHERE status = 'processing' AND started_at < ?
+    `);
+    return stmt.run(cutoff).changes;
+  }
+};
+
+// 反馈相关操作
+export const feedbackDb = {
+  // 添加或更新反馈
+  upsert: (userId, imageId, rating) => {
+    try {
+      // 先尝试插入
+      const stmt = db.prepare('INSERT INTO feedback (user_id, image_id, rating) VALUES (?, ?, ?)');
+      stmt.run(userId, imageId, rating);
+      return true;
+    } catch (e) {
+      // 如果已存在，则更新
+      const stmt = db.prepare('UPDATE feedback SET rating = ? WHERE user_id = ? AND image_id = ?');
+      return stmt.run(rating, userId, imageId).changes > 0;
+    }
+  },
+
+  // 获取用户对某图片的反馈
+  get: (userId, imageId) => {
+    const row = db.prepare('SELECT rating FROM feedback WHERE user_id = ? AND image_id = ?').get(userId, imageId);
+    return row ? row.rating : null;
+  },
+
+  // 获取图片的反馈统计
+  getStats: (imageId) => {
+    const row = db.prepare(`
+      SELECT
+        SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) as likes,
+        SUM(CASE WHEN rating = -1 THEN 1 ELSE 0 END) as dislikes
+      FROM feedback WHERE image_id = ?
+    `).get(imageId);
+    return {
+      likes: row.likes || 0,
+      dislikes: row.dislikes || 0
+    };
+  },
+
+  // 获取模板的反馈统计（通过关联的图片）
+  getTemplateStats: (templateId) => {
+    const row = db.prepare(`
+      SELECT
+        SUM(CASE WHEN f.rating = 1 THEN 1 ELSE 0 END) as likes,
+        SUM(CASE WHEN f.rating = -1 THEN 1 ELSE 0 END) as dislikes,
+        COUNT(f.id) as total
+      FROM feedback f
+      JOIN generated_images g ON f.image_id = g.id
+      WHERE json_extract(g.config, '$.templateId') = ?
+    `).get(templateId);
+    return {
+      likes: row.likes || 0,
+      dislikes: row.dislikes || 0,
+      total: row.total || 0,
+      satisfaction: row.total > 0 ? Math.round((row.likes / row.total) * 100) : null
+    };
   }
 };
 

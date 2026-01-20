@@ -222,41 +222,108 @@ ${templatePrompt}
   throw new Error("TEMPLATE_RENDER_FAILED");
 };
 
-// 使用 Gemini Flash 优化提示词（管理员专用）
+// 使用 Gemini Flash 优化提示词（管理员专用）- 同时生成男女两个版本
 export const optimizePrompt = async (rawPrompt) => {
   const ai = getAI();
-  const model = 'gemini-2.0-flash';  // 使用 Flash 模型进行文本处理
+  const model = 'gemini-2.0-flash';
 
-  const systemPrompt = `你是一位专业的商业摄影和 AI 提示词优化专家。你的任务是优化用户提供的提示词，使其更适合生成高质量的眼镜产品试戴效果图。
+  const systemPrompt = `You are an expert prompt engineer specializing in commercial eyewear photography. Your task is to transform ANY user prompt into a professional eyewear advertisement prompt, generating both FEMALE and MALE versions.
 
-优化原则：
-1. **眼镜还原度**：强调眼镜的精确还原，包括镜框形状、材质、颜色、镜片透明度
-2. **专业摄影术语**：添加合适的光线、构图、景深等摄影参数
-3. **模特描述**：如果涉及模特，补充自然的表情、姿态、服装搭配
-4. **场景氛围**：丰富背景和氛围描述，使画面更有商业感
-5. **技术规格**：添加相机、镜头等技术参数以提升专业度
+<role>
+Expert in: commercial photography prompts, fashion advertising, eyewear product placement, image generation optimization
+</role>
 
-注意事项：
-- 保留用户原始意图的核心元素
-- 输出应该是纯文本的完整提示词，不要添加解释
-- 使用中英文混合，专业术语用英文
-- 控制在 200-400 字之间`;
+<core_task>
+Transform the input prompt into an eyewear model advertisement prompt. The eyewear product image will be uploaded separately - your prompt must ensure the model naturally wears it.
+</core_task>
+
+<transformation_rules>
+
+1. EYEWEAR INTEGRATION (CRITICAL)
+   - If input has NO eyewear/glasses mentioned: Seamlessly integrate "model wearing the reference eyewear" into the scene
+   - If input HAS eyewear descriptions: REMOVE all eyewear appearance details (frame color, shape, style) - the actual product image is uploaded separately
+   - PRESERVE: original scene, lighting, mood, composition, camera settings, styling intent
+
+2. GENERATE TWO VERSIONS
+   - female: Female model with appropriate styling, makeup, feminine poses
+   - male: Male model with appropriate styling, NO makeup descriptions, masculine poses
+
+3. KEEP IDENTICAL BETWEEN VERSIONS
+   - Scene/environment/background
+   - Lighting setup
+   - Camera/lens specifications
+   - Overall mood and color grading
+   - Eyewear fidelity requirements
+
+4. ADAPT PER GENDER
+   - Clothing (dress/heels → suit/leather shoes)
+   - Pose (similar energy, gender-appropriate execution)
+   - Hair styling
+   - Makeup (female only)
+
+</transformation_rules>
+
+<output_structure>
+Each prompt MUST follow this structure:
+
+[EYEWEAR - REFERENCE IMAGE FIDELITY]
+(Mandatory block about reproducing uploaded eyewear with 100% accuracy)
+
+[MODEL]
+{{ethnicity}} {{age}} [gender] model wearing the reference eyewear...
+(Physical description, expression, pose)
+
+[STYLING]
+(Clothing, hair, makeup if female)
+
+[SCENE]
+(Environment, props, atmosphere)
+
+[PHOTOGRAPHY]
+(Camera, lens, lighting, color grade, mood)
+
+</output_structure>
+
+<eyewear_fidelity_block>
+Include this EXACTLY at the start of each prompt:
+
+[EYEWEAR - REFERENCE IMAGE FIDELITY]
+Reproduce the uploaded eyewear with 100% accuracy. Match exactly: frame shape, material, color, temple design, lens tint/transparency, all branding. Model wears glasses naturally on nose bridge, temples behind ears, hair styled to show frame. Clear lenses: eyes sharp and visible with realistic refraction. Natural shadow cast on face.
+</eyewear_fidelity_block>
+
+<variables>
+Use these placeholders for user customization:
+- {{ethnicity}} - model ethnicity
+- {{age}} - model age group
+</variables>
+
+<output_format>
+Return ONLY valid JSON, no markdown, no explanation:
+{"female": "complete English prompt...", "male": "complete English prompt..."}
+</output_format>`;
 
   const response = await ai.models.generateContent({
     model: model,
     contents: {
       parts: [
-        { text: `请优化以下眼镜产品摄影的提示词：\n\n${rawPrompt}` }
+        { text: `Transform the following prompt into eyewear advertisement prompts (female and male versions):\n\n${rawPrompt}` }
       ]
     },
     config: {
       systemInstruction: systemPrompt,
-      temperature: 0.7
+      responseMimeType: "application/json",
+      temperature: 0.3
     }
   });
 
   if (response.candidates?.[0]?.content?.parts?.[0]?.text) {
-    return response.candidates[0].content.parts[0].text.trim();
+    const text = response.candidates[0].content.parts[0].text.trim();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      // 如果解析失败，返回单一版本兼容格式
+      return { female: text, male: null };
+    }
   }
   throw new Error("PROMPT_OPTIMIZATION_FAILED");
 };
