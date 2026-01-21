@@ -12,7 +12,10 @@ import {
 import { authApi, templateApi, generateApi, userApi, tagApi, feedbackApi, batchApi, taskApi } from './services/api';
 import { Button } from './components/Button';
 import { FeatureCard } from './components/FeatureCard';
-import { IconCamera, IconUpload, IconModel, IconCreative, IconPoster, IconGallery } from './components/Icons';
+import {
+  IconCamera, IconUpload, IconModel, IconCreative, IconPoster,
+  IconGallery, IconSettings, IconUser, IconLogout, IconEdit
+} from './components/Icons';
 import { AuthPage } from './components/AuthPage';
 
 const convertBlobToBase64 = (blob: Blob): Promise<string> => {
@@ -44,6 +47,41 @@ const DEFAULT_CONFIG: ModelConfig = {
   aspectRatio: '3:4'
 };
 
+// --- 重用 UI 组件 ---
+
+const NavItem = ({ active, onClick, icon, label }: any) => (
+  <div onClick={onClick} className={`flex items-center gap-5 px-6 py-5 rounded-2xl cursor-pointer transition-all duration-300 ${active ? 'bg-white text-black font-bold scale-[1.02] shadow-xl' : 'text-zinc-600 hover:text-white hover:bg-white/5'}`}>
+    {icon} <span className="text-[10px] tracking-[0.2em] uppercase font-black">{label}</span>
+  </div>
+);
+
+const SelectorGroup = ({ title, icon, color, children }: any) => (
+  <div className="space-y-10 p-10 bg-zinc-900/10 rounded-[3rem] border border-white/[0.03] shadow-inner">
+    <div className="flex items-center gap-4">
+      <div className={`p-3 rounded-2xl ${color} bg-opacity-10 flex items-center justify-center border border-current/10`}>{icon}</div>
+      <h3 className="text-[13px] font-black uppercase tracking-[0.2em] text-white/90">{title}</h3>
+    </div>
+    <div className="space-y-12">{children}</div>
+  </div>
+);
+
+const Selector = ({ label, options, current, onChange, labelMap }: any) => (
+  <div className="flex flex-col gap-5">
+    <label className="text-[10px] text-zinc-600 uppercase tracking-widest font-black">{label}</label>
+    <div className="flex flex-wrap gap-3">
+      {options.map((opt: string) => (
+        <button
+          key={opt}
+          onClick={() => onChange(opt)}
+          className={`px-5 py-4 rounded-2xl text-[10px] font-bold border transition-all duration-500 ${current === opt ? 'bg-white text-black border-white shadow-xl scale-105' : 'bg-zinc-950/40 text-zinc-500 border-white/5 hover:border-white/20'}`}
+        >
+          {labelMap ? (labelMap[opt] || opt) : opt}
+        </button>
+      ))}
+    </div>
+  </div>
+);
+
 const App: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -72,6 +110,12 @@ const App: React.FC = () => {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [newTemplateImage, setNewTemplateImage] = useState<string | null>(null);
+  const [adminTab, setAdminTab] = useState<'create' | 'templates' | 'tags'>('create');  // 管理员页面Tab
+
+  // 标签管理状态
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('#6366f1');
+  const [editingTag, setEditingTag] = useState<Tag | null>(null);
 
   // 新模板表单状态
   const [newTemplateName, setNewTemplateName] = useState('');
@@ -79,6 +123,12 @@ const App: React.FC = () => {
   const [newTemplatePrompt, setNewTemplatePrompt] = useState('');
   const [newTemplateTags, setNewTemplateTags] = useState<string[]>([]);
   const [newTemplateVariables, setNewTemplateVariables] = useState<TemplateVariable[]>([]);
+  const [femaleTemplateTags, setFemaleTemplateTags] = useState<string[]>([]);  // 女性版本标签
+  const [maleTemplateTags, setMaleTemplateTags] = useState<string[]>([]);  // 男性版本标签
+  const [editingTemplate, setEditingTemplate] = useState<TemplateItem | null>(null);  // 正在编辑的模板
+
+  // 模板编辑：性别
+  const [templateDefaultGender, setTemplateDefaultGender] = useState<'male' | 'female'>('female');
 
   // AI优化后的男女版本prompt
   const [optimizedPrompts, setOptimizedPrompts] = useState<{ female: string | null; male: string | null }>({ female: null, male: null });
@@ -92,6 +142,7 @@ const App: React.FC = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateItem | null>(null);
   const [editablePrompt, setEditablePrompt] = useState('');  // 用户可编辑的提示词
   const [showTemplateDetail, setShowTemplateDetail] = useState(false);  // 显示模板详情弹窗
+  const [selectedGender, setSelectedGender] = useState<'male' | 'female'>('female');  // 用户选择的性别
 
   // 用户生成选项
   const [userModelGender, setUserModelGender] = useState('女性');
@@ -141,6 +192,16 @@ const App: React.FC = () => {
     progress: number;
     errorMessage?: string;
     createdAt: number;
+    result?: {
+      imageId: string;
+      imageUrl: string;
+      thumbnailUrl?: string;
+    };
+    outputData?: {
+      imageId: string;
+      imageUrl: string;
+      thumbnailUrl?: string;
+    };
   }
   const [activeTasks, setActiveTasks] = useState<TaskItem[]>([]);
   const [showTaskQueue, setShowTaskQueue] = useState(false);
@@ -148,12 +209,21 @@ const App: React.FC = () => {
 
   // 中英文映射（用于生成英文prompt）
   const ethnicityToEnglish: Record<string, string> = {
+    '中国人': 'Chinese',
+    '日本人': 'Japanese',
+    '韩国人': 'Korean',
     '东亚人': 'East Asian',
     '东南亚人': 'Southeast Asian',
+    '印度人': 'Indian',
     '南亚人': 'South Asian',
+    '中东人': 'Middle Eastern',
+    '白人': 'Caucasian',
+    '黑人': 'African American',
+    '拉丁裔': 'Hispanic/Latino',
+    '亚欧混血': 'Eurasian mixed',
+    '多元族裔': 'Mixed ethnicity',
     '欧裔': 'Caucasian',
     '非裔': 'African',
-    '拉丁裔': 'Hispanic/Latino',
     '中东裔': 'Middle Eastern'
   };
   const ageToEnglish: Record<string, string> = {
@@ -198,30 +268,48 @@ const App: React.FC = () => {
     const ethnicity = ethnicityToEnglish[userModelEthnicity] || userModelEthnicity;
     const age = ageToEnglish[userModelAge] || userModelAge;
 
-    let prompt = template.prompt
+    // 根据选择的性别使用对应的 prompt
+    let basePrompt = template.prompt;
+    if (template.malePrompt || template.femalePrompt) {
+      // 使用选中性别的 prompt，如果不存在则使用另一个
+      if (selectedGender === 'male' && template.malePrompt) {
+        basePrompt = template.malePrompt;
+      } else if (selectedGender === 'female' && template.femalePrompt) {
+        basePrompt = template.femalePrompt;
+      } else if (template.femalePrompt) {
+        basePrompt = template.femalePrompt;
+      } else if (template.malePrompt) {
+        basePrompt = template.malePrompt;
+      }
+    }
+
+    // 只替换核心变量：族裔和年龄
+    // 其他选项由模板预设决定，保持最佳效果
+    const prompt = basePrompt
       .replace(/\{\{ethnicity\}\}/g, ethnicity)
       .replace(/\{\{age\}\}/g, age);
 
-    // 如果开启扩展变量，添加到模特描述中
-    if (includeExtended) {
-      const expression = expressionToEnglish[userExpression] || userExpression;
-      const pose = poseToEnglish[userPose] || userPose;
-      const hairStyle = hairStyleToEnglish[userHairStyle] || userHairStyle;
-      const clothingStyle = clothingStyleToEnglish[userClothingStyle] || userClothingStyle;
-
-      // 在 [MODEL] 部分后添加扩展属性
-      prompt = prompt.replace(
-        /(\[MODEL\][^\[]*)/,
-        `$1\nExpression: ${expression}, Pose: ${pose}, Hair: ${hairStyle}\n`
-      );
-      // 在 [STYLING] 部分添加服装色系
-      prompt = prompt.replace(
-        /(\[STYLING\][^\[]*)/,
-        `$1\nClothing color palette: ${clothingStyle}\n`
-      );
-    }
-
     return prompt;
+  };
+
+  // 处理图片下载（通过 Blob 强制触发下载，避免页面跳转）
+  const handleDownload = async (url: string, filename: string) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error('下载失败:', err);
+      // 降级方案：直接打开链接
+      window.open(url, '_blank');
+    }
   };
 
   // 复制提示词
@@ -350,8 +438,9 @@ const App: React.FC = () => {
 
   // 初始化批量组合
   const initBatchCombinations = () => {
-    const ethnicities = ['东亚人', '欧裔', '非裔'];
-    const ages = ['青年', '成年'];
+    // 使用与单个生成相同的族裔选项
+    const ethnicities = ['中国人', '日本人', '韩国人', '白人', '黑人', '亚欧混血'];
+    const ages = ['青年', '成年', '成熟'];
     const combos: Array<{ ethnicity: string; age: string; selected: boolean }> = [];
     ethnicities.forEach(e => {
       ages.forEach(a => {
@@ -363,6 +452,9 @@ const App: React.FC = () => {
 
   // 用户历史记录
   const [userHistory, setUserHistory] = useState<GeneratedImage[]>([]);
+  const [publicGallery, setPublicGallery] = useState<GeneratedImage[]>([]);
+  const [galleryViewMode, setGalleryViewMode] = useState<'mine' | 'community'>('mine');
+  const [expandedPromptId, setExpandedPromptId] = useState<string | null>(null);
 
   // 修改密码状态
   const [passwordChangeState, setPasswordChangeState] = useState({
@@ -408,6 +500,36 @@ const App: React.FC = () => {
     }
   }, [currentUser]);
 
+  // 加载社区公开作品
+  const loadPublicGallery = useCallback(async () => {
+    try {
+      const images = await userApi.getPublicGallery();
+      setPublicGallery(images);
+    } catch (err) {
+      console.error('加载社区作品失败:', err);
+    }
+  }, []);
+
+  // 分享/取消分享作品
+  const handleShareImage = useCallback(async (imageId: string, isPublic: boolean) => {
+    try {
+      const result = await userApi.shareImage(imageId, isPublic);
+      if (result.success) {
+        // 更新本地状态
+        setUserHistory(prev => prev.map(img =>
+          img.id === imageId ? { ...img, isPublic } : img
+        ));
+        // 如果是分享，刷新社区画廊
+        if (isPublic) {
+          loadPublicGallery();
+        }
+      }
+    } catch (err) {
+      console.error('分享操作失败:', err);
+      alert('操作失败，请重试');
+    }
+  }, [loadPublicGallery]);
+
   // 验证登录状态
   useEffect(() => {
     const verifyAuth = async () => {
@@ -429,7 +551,9 @@ const App: React.FC = () => {
       loadFavorites();
       loadPromptHistory();
     }
-  }, [currentUser, loadUserHistory, loadFavorites, loadPromptHistory]);
+    // 社区作品不需要登录也可以加载
+    loadPublicGallery();
+  }, [currentUser, loadUserHistory, loadFavorites, loadPromptHistory, loadPublicGallery]);
 
   // 任务轮询：定期检查活跃任务状态
   useEffect(() => {
@@ -440,10 +564,18 @@ const App: React.FC = () => {
         const { tasks } = await taskApi.getTasks(true);  // 只获取活跃任务
         setActiveTasks(tasks as TaskItem[]);
 
-        // 如果有任务完成，刷新历史记录
-        const hasCompleted = tasks.some((t: any) => t.status === 'completed');
-        if (hasCompleted) {
+        // 查找最新完成的任务
+        const completedTasks = tasks.filter((t: any) => t.status === 'completed');
+        if (completedTasks.length > 0) {
+          // 刷新历史记录
           loadUserHistory();
+
+          // 如果用户正在等待结果（generatedImage 为空），自动加载展示最新完成的一张
+          // 或者如果主预览区还是之前的旧图，也可以考虑更新
+          const latestCompleted = completedTasks.sort((a, b) => b.createdAt - a.createdAt)[0];
+          if (latestCompleted && (latestCompleted.outputData?.imageUrl || (latestCompleted as any).result?.imageUrl)) {
+            setGeneratedImage(latestCompleted.outputData?.imageUrl || (latestCompleted as any).result?.imageUrl);
+          }
         }
       } catch (err) {
         console.error('任务轮询失败:', err);
@@ -453,8 +585,8 @@ const App: React.FC = () => {
     // 立即执行一次
     pollTasks();
 
-    // 每5秒轮询一次
-    const interval = setInterval(pollTasks, 5000);
+    // 每3秒轮询一次（提高实时感）
+    const interval = setInterval(pollTasks, 3000);
     return () => clearInterval(interval);
   }, [currentUser, taskPollingEnabled, loadUserHistory]);
 
@@ -554,7 +686,7 @@ const App: React.FC = () => {
   };
 
   // 使用自定义提示词生成（用户可编辑后直接生成）
-  const handleGenerateWithPrompt = async (customPrompt: string, aspectRatio?: string) => {
+  const handleGenerateWithPrompt = async (customPrompt: string, aspectRatio?: string, shouldNavigate = true) => {
     if (!currentUser) {
       setError('请先登录后再生成图片');
       navigate('/login');
@@ -566,9 +698,13 @@ const App: React.FC = () => {
     }
 
     setIsGenerating(true);
+    setGeneratedImage(null); // 清除上一张图，显示加载状态
     setError(null);
-    navigate('/');
-    setMode(AppMode.RESULT);
+
+    if (shouldNavigate) {
+      navigate('/');
+      setMode(AppMode.RESULT);
+    }
 
     // 开启任务轮询
     setTaskPollingEnabled(true);
@@ -696,17 +832,17 @@ const App: React.FC = () => {
       : templates;
 
     return (
-      <div className="space-y-12 animate-fade-in pb-20">
-        <div className="space-y-4 text-center max-w-xl mx-auto">
-          <h2 className="text-5xl font-serif italic text-white">模板广场</h2>
-          <p className="text-zinc-500 text-xs uppercase tracking-[0.3em] font-black">Curated Masterpiece Library</p>
+      <div className="space-y-8 lg:space-y-12 animate-fade-in pb-20">
+        <div className="space-y-2 lg:space-y-4 text-center max-w-xl mx-auto">
+          <h2 className="text-3xl lg:text-5xl font-serif italic text-white">模板广场</h2>
+          <p className="text-zinc-500 text-[10px] lg:text-xs uppercase tracking-[0.2em] lg:tracking-[0.3em] font-black">Curated Masterpiece Library</p>
         </div>
 
-        {/* 标签筛选栏 */}
-        <div className="flex flex-wrap justify-center gap-3">
+        {/* 标签筛选栏 - 移动端横向滚动 */}
+        <div className="flex gap-2 lg:gap-3 overflow-x-auto pb-2 lg:pb-0 lg:flex-wrap lg:justify-center scrollbar-hide -mx-4 px-4 lg:mx-0 lg:px-0">
           <button
             onClick={() => setFilterTag(null)}
-            className={`px-5 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${!filterTag ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-500 border border-white/5 hover:border-white/20'}`}
+            className={`px-4 lg:px-5 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap flex-shrink-0 ${!filterTag ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-500 border border-white/5 hover:border-white/20'}`}
           >
             全部
           </button>
@@ -714,7 +850,7 @@ const App: React.FC = () => {
             <button
               key={tag.id}
               onClick={() => setFilterTag(tag.id)}
-              className={`px-5 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${filterTag === tag.id ? 'text-white' : 'bg-zinc-900 text-zinc-500 border border-white/5 hover:border-white/20'}`}
+              className={`px-4 lg:px-5 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap flex-shrink-0 ${filterTag === tag.id ? 'text-white' : 'bg-zinc-900 text-zinc-500 border border-white/5 hover:border-white/20'}`}
               style={filterTag === tag.id ? { backgroundColor: tag.color } : {}}
             >
               {tag.name}
@@ -733,12 +869,21 @@ const App: React.FC = () => {
               key={tpl.id}
               onClick={() => {
                 setSelectedTemplate(tpl);
-                setEditablePrompt(tpl.prompt);
+                // 根据模板的prompt类型设置默认选择
+                if (tpl.femalePrompt) {
+                  setSelectedGender('female');
+                  setEditablePrompt(tpl.femalePrompt);
+                } else if (tpl.malePrompt) {
+                  setSelectedGender('male');
+                  setEditablePrompt(tpl.malePrompt);
+                } else {
+                  setEditablePrompt(tpl.prompt);
+                }
                 setShowTemplateDetail(true);
               }}
-              className="group relative aspect-[3/4] rounded-[3rem] overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-all duration-700 hover:scale-[1.02] shadow-2xl"
+              className="group relative aspect-[3/4] rounded-2xl lg:rounded-[3rem] overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-all duration-700 hover:scale-[1.02] shadow-xl lg:shadow-2xl"
             >
-              <img src={tpl.imageUrl} className="w-full h-full object-cover grayscale-[0.5] group-hover:grayscale-0 transition-all duration-700" />
+              <img src={tpl.imageUrl} className="w-full h-full object-cover transition-all duration-500" />
               <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80 group-hover:opacity-100 transition-opacity"></div>
               {/* 标签显示 */}
               <div className="absolute top-6 left-6 flex flex-wrap gap-2">
@@ -751,11 +896,11 @@ const App: React.FC = () => {
                   ) : null;
                 })}
               </div>
-              <div className="absolute bottom-10 left-10 right-10 space-y-3 translate-y-4 group-hover:translate-y-0 transition-all duration-700">
-                <h3 className="text-2xl font-serif italic text-white">{tpl.name}</h3>
-                <p className="text-zinc-400 text-[10px] uppercase tracking-widest font-bold line-clamp-1">{tpl.description}</p>
-                <div className="pt-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <span className="px-5 py-2 rounded-full bg-white text-black text-[9px] font-black uppercase tracking-widest">查看详情</span>
+              <div className="absolute bottom-6 left-6 right-6 lg:bottom-10 lg:left-10 lg:right-10 space-y-2 lg:space-y-3 translate-y-4 group-hover:translate-y-0 transition-all duration-700">
+                <h3 className="text-lg lg:text-2xl font-serif italic text-white">{tpl.name}</h3>
+                <p className="text-zinc-400 text-[9px] lg:text-[10px] uppercase tracking-widest font-bold line-clamp-1">{tpl.description}</p>
+                <div className="pt-2 lg:pt-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="px-4 lg:px-5 py-1.5 lg:py-2 rounded-full bg-white text-black text-[8px] lg:text-[9px] font-black uppercase tracking-widest">查看详情</span>
                 </div>
               </div>
             </div>
@@ -795,69 +940,70 @@ const App: React.FC = () => {
                 </div>
               </div>
 
+              {/* 性别选择（仅当模板有男或女版本时显示） */}
+              {(selectedTemplate.malePrompt || selectedTemplate.femalePrompt) && (
+                <div className="p-4 bg-gradient-to-r from-pink-900/20 to-blue-900/20 border border-white/5 rounded-2xl space-y-3">
+                  <label className="text-[10px] text-zinc-400 uppercase tracking-widest font-black">选择版本</label>
+                  <div className="flex gap-3">
+                    {selectedTemplate.femalePrompt && (
+                      <button
+                        onClick={() => {
+                          setSelectedGender('female');
+                          if (!isEditMode) {
+                            setEditablePrompt(selectedTemplate.femalePrompt!);
+                          }
+                        }}
+                        className={`${selectedTemplate.malePrompt ? 'flex-1' : 'w-full'} py-3 rounded-xl text-sm font-bold transition-all ${selectedGender === 'female'
+                          ? 'bg-pink-600 text-white shadow-lg shadow-pink-900/50'
+                          : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                          }`}
+                      >
+                        👩 女性版本
+                      </button>
+                    )}
+                    {selectedTemplate.malePrompt && (
+                      <button
+                        onClick={() => {
+                          setSelectedGender('male');
+                          if (!isEditMode) {
+                            setEditablePrompt(selectedTemplate.malePrompt!);
+                          }
+                        }}
+                        className={`${selectedTemplate.femalePrompt ? 'flex-1' : 'w-full'} py-3 rounded-xl text-sm font-bold transition-all ${selectedGender === 'male'
+                          ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50'
+                          : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                          }`}
+                      >
+                        👨 男性版本
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[9px] text-zinc-500 text-center">
+                    {selectedTemplate.femalePrompt && selectedTemplate.malePrompt
+                      ? (selectedGender === 'female' ? '使用女性模特提示词' : '使用男性模特提示词')
+                      : selectedTemplate.femalePrompt
+                        ? '使用女性模特提示词'
+                        : '使用男性模特提示词'
+                    }
+                  </p>
+                </div>
+              )}
+
               {/* 模式切换标签 */}
               <div className="flex bg-zinc-800/50 p-1 rounded-xl">
                 <button
-                  onClick={() => { setIsBatchMode(false); setIsEditMode(false); }}
-                  className={`flex-1 py-2 rounded-lg text-[10px] font-bold transition-all ${!isBatchMode && !isEditMode ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}
+                  onClick={() => { setIsEditMode(false); }}
+                  className={`flex-1 py-2 rounded-lg text-[10px] font-bold transition-all ${!isEditMode ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}
                 >
-                  单张生成
+                  快速生成
                 </button>
                 <button
-                  onClick={() => { setIsBatchMode(true); setIsEditMode(false); initBatchCombinations(); }}
-                  className={`flex-1 py-2 rounded-lg text-[10px] font-bold transition-all ${isBatchMode ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-white'}`}
-                >
-                  批量生成
-                </button>
-                <button
-                  onClick={() => { setIsEditMode(true); setIsBatchMode(false); setEditedPrompt(getFullPrompt(selectedTemplate)); }}
+                  onClick={() => { setIsEditMode(true); setEditedPrompt(getFullPrompt(selectedTemplate)); }}
                   className={`flex-1 py-2 rounded-lg text-[10px] font-bold transition-all ${isEditMode ? 'bg-purple-600 text-white' : 'text-zinc-400 hover:text-white'}`}
                 >
                   编辑提示词
                 </button>
               </div>
-
-              {/* 批量生成模式 */}
-              {isBatchMode && (
-                <div className="space-y-4 p-4 bg-blue-900/20 border border-blue-500/20 rounded-2xl">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] text-blue-400 uppercase tracking-widest font-black">选择组合 (最多5个)</label>
-                    <span className="text-[10px] text-zinc-500">
-                      已选 {batchCombinations.filter(c => c.selected).length}/5
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {batchCombinations.map((combo, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          const selected = batchCombinations.filter(c => c.selected).length;
-                          if (!combo.selected && selected >= 5) return;
-                          setBatchCombinations(prev => prev.map((c, i) => i === idx ? { ...c, selected: !c.selected } : c));
-                        }}
-                        className={`p-3 rounded-xl text-left transition-all ${combo.selected ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
-                      >
-                        <p className="text-[10px] font-bold">{combo.ethnicity}</p>
-                        <p className="text-[9px] opacity-70">{combo.age}</p>
-                      </button>
-                    ))}
-                  </div>
-                  <Button
-                    onClick={handleBatchGenerate}
-                    isLoading={isBatchGenerating}
-                    className="w-full h-12 rounded-xl bg-blue-600 text-white text-[10px] font-black"
-                  >
-                    {isBatchGenerating ? '批量生成中...' : `批量生成 ${batchCombinations.filter(c => c.selected).length} 张`}
-                  </Button>
-                  {batchResults.length > 0 && (
-                    <div className="grid grid-cols-3 gap-2 mt-4">
-                      {batchResults.map((r, i) => (
-                        <img key={i} src={r.imageUrl} className="w-full aspect-[3/4] object-cover rounded-xl" />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* 编辑提示词模式 */}
               {isEditMode && (
@@ -912,13 +1058,23 @@ const App: React.FC = () => {
                       <div className="space-y-1.5">
                         <label className="text-[9px] text-zinc-400 font-bold">族裔</label>
                         <select value={userModelEthnicity} onChange={(e) => setUserModelEthnicity(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
-                          <option value="东亚人">东亚人</option>
-                          <option value="东南亚人">东南亚人</option>
-                          <option value="南亚人">南亚人</option>
-                          <option value="欧裔">欧裔</option>
-                          <option value="非裔">非裔</option>
-                          <option value="拉丁裔">拉丁裔</option>
-                          <option value="中东裔">中东裔</option>
+                          <optgroup label="亚洲">
+                            <option value="中国人">中国人</option>
+                            <option value="日本人">日本人</option>
+                            <option value="韩国人">韩国人</option>
+                            <option value="东南亚人">东南亚人</option>
+                            <option value="印度人">印度人</option>
+                            <option value="中东人">中东人</option>
+                          </optgroup>
+                          <optgroup label="欧美">
+                            <option value="白人">白人</option>
+                            <option value="黑人">黑人</option>
+                            <option value="拉丁裔">拉丁裔</option>
+                          </optgroup>
+                          <optgroup label="混血">
+                            <option value="亚欧混血">亚欧混血</option>
+                            <option value="多元族裔">多元族裔</option>
+                          </optgroup>
                         </select>
                       </div>
                       <div className="space-y-1.5">
@@ -934,47 +1090,10 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* 扩展模特选项 */}
-                  <details className="group">
-                    <summary className="text-[10px] text-zinc-500 uppercase tracking-widest font-black cursor-pointer hover:text-zinc-400 flex items-center gap-2">
-                      <span>高级选项</span>
-                      <svg className="w-3 h-3 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-                    </summary>
-                    <div className="mt-3 grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <label className="text-[9px] text-zinc-400 font-bold">表情</label>
-                        <select value={userExpression} onChange={(e) => setUserExpression(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
-                          {EXTENDED_VARIABLES.expression.options.map(opt => (
-                            <option key={opt.zh} value={opt.zh}>{opt.zh}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[9px] text-zinc-400 font-bold">视角</label>
-                        <select value={userPose} onChange={(e) => setUserPose(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
-                          {EXTENDED_VARIABLES.pose.options.map(opt => (
-                            <option key={opt.zh} value={opt.zh}>{opt.zh}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[9px] text-zinc-400 font-bold">发型</label>
-                        <select value={userHairStyle} onChange={(e) => setUserHairStyle(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
-                          {EXTENDED_VARIABLES.hairStyle.options.map(opt => (
-                            <option key={opt.zh} value={opt.zh}>{opt.zh}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[9px] text-zinc-400 font-bold">服装色系</label>
-                        <select value={userClothingStyle} onChange={(e) => setUserClothingStyle(e.target.value)} className="w-full px-3 py-2.5 bg-zinc-800 border border-white/5 rounded-xl text-white text-xs focus:outline-none focus:border-white/20">
-                          {EXTENDED_VARIABLES.clothingStyle.options.map(opt => (
-                            <option key={opt.zh} value={opt.zh}>{opt.zh}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </details>
+                  {/* 提示：核心选项 */}
+                  <p className="text-[9px] text-zinc-600 text-center">
+                    其他选项由模板预设决定，保持最佳效果
+                  </p>
 
                   {/* 图像选项 */}
                   <div className="space-y-3">
@@ -1042,7 +1161,8 @@ const App: React.FC = () => {
                         }
                         const finalPrompt = getFullPrompt(selectedTemplate);
                         setShowTemplateDetail(false);
-                        handleGenerateWithPrompt(finalPrompt, userAspectRatio);
+                        // 在模板广场生成时，不跳转回主页
+                        handleGenerateWithPrompt(finalPrompt, userAspectRatio, false);
                       }}
                       className="flex-1 py-3.5 rounded-2xl bg-white text-black text-[10px] font-black uppercase tracking-widest hover:bg-zinc-200 transition-colors"
                     >
@@ -1161,310 +1281,676 @@ const App: React.FC = () => {
     }
 
     return (
-      <div className="max-w-4xl mx-auto space-y-12 animate-fade-in">
-        <div className="flex items-center justify-between">
+      <div className="max-w-6xl mx-auto space-y-10 animate-fade-in px-4 pb-20">
+        {/* 页眉区域 */}
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-white/5 pb-10">
           <div className="space-y-4">
-            <h2 className="text-5xl font-serif italic text-white">管理员后台</h2>
-            <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Template & Prompt Management</p>
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                <IconSettings className="w-6 h-6 text-white" />
+              </div>
+              <h2 className="text-6xl font-serif italic text-white tracking-tight">Admin <span className="text-zinc-500 not-italic text-2xl ml-2 font-light">Panel</span></h2>
+            </div>
+            <p className="text-zinc-500 text-xs uppercase tracking-[0.2em] font-black pl-1">专业的模板与标签内容管理系统</p>
           </div>
           <button
             onClick={handleAdminLogout}
-            className="px-6 py-3 bg-zinc-900 border border-white/5 rounded-xl text-zinc-400 text-[10px] uppercase tracking-widest font-black hover:bg-red-900/20 hover:text-red-400 hover:border-red-900/30 transition-all"
+            className="group flex items-center gap-2 px-6 py-3 bg-white/5 border border-white/10 rounded-2xl text-zinc-400 text-[10px] uppercase tracking-widest font-black hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20 transition-all active:scale-95"
           >
-            退出登录
+            <span>退出管理系统</span>
+            <IconLogout className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-          {/* 左列：图片上传 */}
-          <div className="space-y-6">
-            <div
-              onClick={() => adminFileInputRef.current?.click()}
-              className="aspect-[3/4] rounded-[2.5rem] bg-zinc-900 border border-dashed border-white/10 flex items-center justify-center cursor-pointer overflow-hidden"
+        {/* 顶部统计或全局操作栏（可选） */}
+
+        {/* 导航 Tab */}
+        <div className="flex bg-[#0a0a0a] p-1.5 rounded-[2rem] border border-white/5 w-fit shadow-2xl backdrop-blur-xl">
+          {[
+            { id: 'create', label: '✨ 创建新模板', activeColor: 'bg-white text-black' },
+            { id: 'templates', label: '📋 已发布模板', activeColor: 'bg-white text-black' },
+            { id: 'tags', label: '🏷️ 标签库管理', activeColor: 'bg-white text-black' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setAdminTab(tab.id as any)}
+              className={`px-8 py-4 rounded-[1.5rem] text-[11px] font-black uppercase tracking-widest transition-all duration-500 ${adminTab === tab.id
+                ? `${tab.activeColor} shadow-xl scale-[1.02]`
+                : 'text-zinc-600 hover:text-zinc-300 hover:bg-white/5'
+                }`}
             >
-              {newTemplateImage ? (
-                <img src={newTemplateImage} className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-zinc-500 font-bold uppercase tracking-widest text-[9px]">点击上传效果示例图</span>
-              )}
-              <input type="file" ref={adminFileInputRef} className="hidden" onChange={async (e) => {
-                if (e.target.files?.[0]) setNewTemplateImage(`data:image/jpeg;base64,${await convertBlobToBase64(e.target.files[0])}`);
-              }} />
-            </div>
-          </div>
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-          {/* 右列：表单 */}
-          <div className="space-y-6">
-            <div className="p-8 ios-card space-y-6">
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">模板信息</h4>
-
-              {/* 模板名称 */}
-              <div className="space-y-2">
-                <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">模板名称</label>
-                <input
-                  type="text"
-                  value={newTemplateName}
-                  onChange={(e) => setNewTemplateName(e.target.value)}
-                  className="w-full px-4 py-3 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20"
-                  placeholder="例如：都市精英风格"
-                />
-              </div>
-
-              {/* 标签（多选） */}
-              <div className="space-y-2">
-                <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">标签（可多选）</label>
-                <div className="flex flex-wrap gap-2">
-                  {allTags.map(tag => (
-                    <button
-                      key={tag.id}
-                      onClick={() => {
-                        setNewTemplateTags(prev =>
-                          prev.includes(tag.id)
-                            ? prev.filter(t => t !== tag.id)
-                            : [...prev, tag.id]
-                        );
-                      }}
-                      className={`px-4 py-2 rounded-xl text-[10px] font-bold border transition-all ${newTemplateTags.includes(tag.id) ? 'text-white border-white' : 'bg-zinc-900 text-zinc-500 border-white/5 hover:border-white/20'}`}
-                      style={newTemplateTags.includes(tag.id) ? { backgroundColor: tag.color, borderColor: tag.color } : {}}
-                    >
-                      {tag.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* 描述 */}
-              <div className="space-y-2">
-                <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">描述</label>
-                <input
-                  type="text"
-                  value={newTemplateDesc}
-                  onChange={(e) => setNewTemplateDesc(e.target.value)}
-                  className="w-full px-4 py-3 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20"
-                  placeholder="简短描述此模板风格"
-                />
-              </div>
-
-              {/* 原始提示词输入 */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">
-                    原始提示词 <span className="text-zinc-700">(粘贴后点击AI优化生成男女两个版本)</span>
-                  </label>
-                  <button
-                    onClick={async () => {
-                      if (!newTemplatePrompt.trim()) {
-                        setError('请先输入提示词');
-                        return;
-                      }
-                      setIsGenerating(true);
-                      setShowOptimizedPrompts(false);
-                      try {
-                        const response = await fetch('/api/generate/optimize-prompt', {
-                          method: 'POST',
-                          headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${localStorage.getItem('lyra_auth_token')}`
-                          },
-                          body: JSON.stringify({ prompt: newTemplatePrompt })
-                        });
-                        const data = await response.json();
-                        if (!response.ok) throw new Error(data.error);
-                        // 新格式返回 { female, male }
-                        if (data.optimizedPrompt && typeof data.optimizedPrompt === 'object') {
-                          setOptimizedPrompts(data.optimizedPrompt);
-                          setShowOptimizedPrompts(true);
-                        } else if (data.optimizedPrompt) {
-                          // 兼容旧格式
-                          setOptimizedPrompts({ female: data.optimizedPrompt, male: null });
-                          setShowOptimizedPrompts(true);
-                        }
-                      } catch (err: any) {
-                        setError(err.message || 'AI优化失败');
-                      } finally {
-                        setIsGenerating(false);
-                      }
-                    }}
-                    disabled={isGenerating}
-                    className="px-4 py-2 rounded-xl text-[10px] font-bold bg-gradient-to-r from-purple-600 to-blue-600 text-white hover:opacity-80 transition-opacity disabled:opacity-50"
+        {/* 内容区域 */}
+        <div className="min-h-[60vh]">
+          {/* 创建新模板 */}
+          {adminTab === 'create' && (
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-10 items-start">
+              {/* 左侧：视觉预览与上传 */}
+              <div className="xl:col-span-5 space-y-6 sticky top-10">
+                <div className="space-y-3">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-500 pl-2">效果示例预览</h3>
+                  <div
+                    onClick={() => adminFileInputRef.current?.click()}
+                    className={`aspect-[3/4] rounded-[3.5rem] border-2 border-dashed transition-all duration-700 group relative flex flex-col items-center justify-center cursor-pointer overflow-hidden ${newTemplateImage
+                      ? 'border-white/20 bg-zinc-900'
+                      : 'border-white/5 bg-[#080808] hover:border-indigo-500/30 hover:bg-indigo-500/5'
+                      }`}
                   >
-                    {isGenerating ? '生成中...' : '✨ AI 生成男女版本'}
-                  </button>
+                    {newTemplateImage ? (
+                      <>
+                        <img src={newTemplateImage} className="w-full h-full object-cover animate-fade-in" />
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm">
+                          <div className="flex flex-col items-center gap-4">
+                            <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center border border-white/20">
+                              <IconEdit className="w-6 h-6 text-white" />
+                            </div>
+                            <span className="text-white text-[10px] font-black uppercase tracking-widest">点击更换示例图</span>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center space-y-6 p-10 animate-fade-in">
+                        <div className="w-20 h-20 rounded-[2rem] bg-zinc-900 border border-white/5 mx-auto flex items-center justify-center group-hover:scale-110 group-hover:border-indigo-500/50 transition-all duration-500 shadow-2xl">
+                          <IconUpload className="w-8 h-8 text-zinc-600 group-hover:text-indigo-400 transition-colors" />
+                        </div>
+                        <div className="space-y-2">
+                          <p className="text-white text-sm font-bold">上传高质量示例图</p>
+                          <p className="text-zinc-600 text-[10px] uppercase tracking-widest leading-relaxed">尺寸建议 3:4<br />这决定了用户在广场看到的第一印象</p>
+                        </div>
+                      </div>
+                    )}
+                    <input type="file" ref={adminFileInputRef} className="hidden" onChange={async (e) => {
+                      if (e.target.files?.[0]) setNewTemplateImage(`data:image/jpeg;base64,${await convertBlobToBase64(e.target.files[0])}`);
+                    }} />
+                  </div>
                 </div>
-                <textarea
-                  value={newTemplatePrompt}
-                  onChange={(e) => {
-                    setNewTemplatePrompt(e.target.value);
-                    setShowOptimizedPrompts(false);
-                  }}
-                  rows={4}
-                  className="w-full px-4 py-3 bg-zinc-900 border border-white/5 rounded-xl text-white text-sm focus:outline-none focus:border-white/20 resize-none"
-                  placeholder="粘贴你的原始prompt，AI会自动生成男女两个版本..."
-                />
+
+                {/* AI 预览提示卡片 */}
+                {!showOptimizedPrompts && !editingTemplate && (
+                  <div className="p-8 rounded-[2.5rem] bg-gradient-to-br from-indigo-900/10 via-zinc-900/50 to-transparent border border-white/5 space-y-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-indigo-500/20 flex items-center justify-center">
+                        <span className="text-lg">💡</span>
+                      </div>
+                      <h4 className="text-[11px] font-black uppercase tracking-widest text-zinc-300">智能创作建议</h4>
+                    </div>
+                    <ul className="space-y-3 text-[10px] text-zinc-500 leading-relaxed font-medium">
+                      <li className="flex gap-3"><span className="text-indigo-500">01</span> 先填入基础风格描述，AI 会为您扩展细节</li>
+                      <li className="flex gap-3"><span className="text-indigo-500">02</span> 系统会自动生成贴合眼镜佩戴场景的 Prompt</li>
+                      <li className="flex gap-3"><span className="text-indigo-500">03</span> 您可以随时在 AI 生成结果基础上进行二次微调</li>
+                    </ul>
+                  </div>
+                )}
               </div>
 
-              {/* AI生成的男女版本 */}
-              {showOptimizedPrompts && (
-                <div className="space-y-4 p-4 bg-zinc-800/50 rounded-2xl border border-white/5">
-                  <h5 className="text-[10px] font-black uppercase tracking-widest text-green-400">✓ AI 已生成两个版本</h5>
+              {/* 右侧：配置参数表单 */}
+              <div className="xl:col-span-7 space-y-8">
+                <div className="glass-card rounded-[3.5rem] p-10 space-y-10 border border-white/5 shadow-2xl">
+                  {/* 分组：基础信息 */}
+                  <div className="space-y-8">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm">📝</span>
+                        <h4 className="text-[11px] font-black uppercase tracking-widest text-white">模板基础档案</h4>
+                      </div>
+                      {editingTemplate && (
+                        <button
+                          onClick={() => {
+                            setEditingTemplate(null);
+                            setNewTemplateImage(null);
+                            setNewTemplateName('');
+                            setNewTemplateDesc('');
+                            setNewTemplatePrompt('');
+                            setNewTemplateTags([]);
+                            setOptimizedPrompts({ female: null, male: null });
+                            setShowOptimizedPrompts(false);
+                          }}
+                          className="px-4 py-2 rounded-xl bg-zinc-800 text-zinc-400 text-[10px] font-bold uppercase tracking-widest hover:bg-red-900/40 hover:text-red-300 transition-all active:scale-95"
+                        >
+                          跳出编辑模式
+                        </button>
+                      )}
+                    </div>
 
-                  {/* 女性版本 */}
-                  {optimizedPrompts.female && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[10px] text-pink-400 uppercase tracking-widest font-black">👩 女性版本</label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      {/* 模板名称 */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between px-1">
+                          <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">模板显示名称</label>
+                          {newTemplateName && <span className="text-[9px] text-zinc-700 animate-pulse">已填写</span>}
+                        </div>
+                        <input
+                          type="text"
+                          value={newTemplateName}
+                          onChange={(e) => setNewTemplateName(e.target.value)}
+                          className="w-full px-6 py-4 bg-[#080808] border border-white/5 rounded-2xl text-white text-sm focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all placeholder:text-zinc-800"
+                          placeholder="例如：米兰时装周街拍"
+                        />
+                      </div>
+
+                      {/* 描述 */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between px-1">
+                          <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">模板简短描述</label>
+                        </div>
+                        <input
+                          type="text"
+                          value={newTemplateDesc}
+                          onChange={(e) => setNewTemplateDesc(e.target.value)}
+                          className="w-full px-6 py-4 bg-[#080808] border border-white/5 rounded-2xl text-white text-sm focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all placeholder:text-zinc-800"
+                          placeholder="简述风格主题..."
+                        />
+                      </div>
+                    </div>
+
+                    {/* 标签管理 */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between px-1">
+                        <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">模板归属标签</label>
+                        <span className="text-[9px] text-zinc-600">选择标签以便用户分类查找</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2.5">
+                        {allTags.map(tag => (
+                          <button
+                            key={tag.id}
+                            onClick={() => {
+                              setNewTemplateTags(prev =>
+                                prev.includes(tag.id) ? prev.filter(t => t !== tag.id) : [...prev, tag.id]
+                              );
+                            }}
+                            className={`px-5 py-3 rounded-2xl text-[10px] font-bold border transition-all active:scale-95 ${newTemplateTags.includes(tag.id)
+                              ? 'text-white shadow-lg'
+                              : 'bg-zinc-900/50 text-zinc-600 border-white/5 hover:border-white/20 hover:text-zinc-400'
+                              }`}
+                            style={newTemplateTags.includes(tag.id) ? { backgroundColor: tag.color, borderColor: tag.color } : {}}
+                          >
+                            {tag.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 默认渲染参数 - 性别 (精简版) */}
+                    <div className="space-y-4 pt-6 border-t border-white/5">
+                      <div className="flex items-center justify-between px-1">
+                        <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">默认性别倾向</label>
+                        <div className="flex p-1 bg-[#080808] rounded-2xl border border-white/5">
+                          {(['female', 'male'] as const).map(gender => (
+                            <button
+                              key={gender}
+                              onClick={() => setTemplateDefaultGender(gender)}
+                              className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${templateDefaultGender === gender
+                                ? gender === 'female' ? 'bg-pink-600 text-white shadow-lg shadow-pink-900/20' : 'bg-blue-600 text-white shadow-lg shadow-blue-900/20'
+                                : 'text-zinc-600 hover:text-zinc-400'
+                                }`}
+                            >
+                              {gender === 'female' ? 'WOMAN' : 'MAN'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 分组：提示词核心 */}
+                    <div className="space-y-6 pt-6 border-t border-white/5">
+                      <div className="flex items-center gap-3 border-b border-white/5 pb-4">
+                        <span className="text-sm">🪄</span>
+                        <h4 className="text-[11px] font-black uppercase tracking-widest text-white">智慧提示词核心</h4>
+                      </div>
+
+                      <div className="space-y-6">
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between px-1">
+                            <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black">原始创意描述 (Step 1)</label>
+                            <span className="text-[9px] text-zinc-700">任何语言均可</span>
+                          </div>
+                          <textarea
+                            value={newTemplatePrompt}
+                            onChange={(e) => {
+                              setNewTemplatePrompt(e.target.value);
+                              setShowOptimizedPrompts(false);
+                            }}
+                            rows={4}
+                            className="w-full px-6 py-5 bg-[#080808] border border-white/5 rounded-[2rem] text-white text-sm focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 resize-none transition-all placeholder:text-zinc-800"
+                            placeholder="例如：在巴黎街头的雨中，撑着伞，霓虹灯倒影，高级胶片质感..."
+                          />
+                        </div>
+
                         <button
                           onClick={async () => {
-                            if (!newTemplateImage) {
-                              setError('请先上传图片');
+                            if (!newTemplatePrompt.trim()) {
+                              setError('请先输入提示词核心创意');
                               return;
                             }
+                            setIsGenerating(true);
+                            setShowOptimizedPrompts(false);
                             try {
-                              const newTpl: TemplateItem = {
-                                id: Date.now().toString() + '_female',
+                              const response = await fetch('/api/generate/optimize-prompt', {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  'Authorization': `Bearer ${localStorage.getItem('lyra_auth_token')}`
+                                },
+                                body: JSON.stringify({ prompt: newTemplatePrompt })
+                              });
+                              const data = await response.json();
+                              if (!response.ok) throw new Error(data.error);
+
+                              if (data.optimizedPrompt && typeof data.optimizedPrompt === 'object') {
+                                const result = data.optimizedPrompt;
+                                if (result.name && !editingTemplate) setNewTemplateName(result.name);
+                                if (result.description && !editingTemplate) setNewTemplateDesc(result.description);
+                                setOptimizedPrompts({ female: result.female || null, male: result.male || null });
+                                setShowOptimizedPrompts(true);
+                              } else if (data.optimizedPrompt) {
+                                setOptimizedPrompts({ female: data.optimizedPrompt, male: null });
+                                setShowOptimizedPrompts(true);
+                              }
+                            } catch (err: any) {
+                              setError(err.message || 'AI 优化引擎连接失败');
+                            } finally {
+                              setIsGenerating(false);
+                            }
+                          }}
+                          disabled={isGenerating}
+                          className="w-full group relative py-6 rounded-[2.5rem] overflow-hidden bg-white hover:scale-[1.01] transition-all duration-500 disabled:opacity-50 active:scale-95 shadow-xl shadow-white/5"
+                        >
+                          <div className="absolute inset-0 bg-gradient-to-r from-indigo-600 via-violet-600 to-pink-600 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                          <span className={`relative z-10 text-[11px] font-black uppercase tracking-[0.2em] transition-colors duration-500 ${isGenerating ? 'text-zinc-400' : 'text-black group-hover:text-white'}`}>
+                            {isGenerating ? 'AI 正在深度构建中...' : '✨ 唤醒 AI 自动生成全套预设 (Step 2)'}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* AI 优化出的最终确认区 */}
+                    {showOptimizedPrompts && (
+                      <div className="space-y-8 p-10 bg-gradient-to-br from-[#0c0c14] to-[#080808] rounded-[3.5rem] border border-indigo-500/20 shadow-2xl animate-slide-up">
+                        <div className="flex items-center gap-3 border-b border-indigo-500/10 pb-6">
+                          <div className="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
+                            <svg className="w-5 h-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                          <div className="space-y-1">
+                            <h5 className="text-[11px] font-black uppercase tracking-widest text-green-400">AI 预设已生成</h5>
+                            <p className="text-[9px] text-zinc-600 uppercase tracking-widest">请详细核对并将创意最终发布 (Step 3)</p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-8">
+                          {/* 女性版本 */}
+                          {optimizedPrompts.female && (
+                            <div className="space-y-4">
+                              <div className="flex items-center justify-between px-2">
+                                <label className="text-[10px] text-pink-500 uppercase tracking-widest font-black flex items-center gap-2">
+                                  <span className="w-2 h-2 rounded-full bg-pink-600"></span>
+                                  女性场景渲染指令
+                                </label>
+                                <button onClick={() => setOptimizedPrompts(prev => ({ ...prev, female: null }))} className="text-[9px] text-zinc-700 hover:text-red-400 transition-colors uppercase font-black">丢弃</button>
+                              </div>
+                              <textarea
+                                value={optimizedPrompts.female}
+                                onChange={(e) => setOptimizedPrompts(prev => ({ ...prev, female: e.target.value }))}
+                                rows={6}
+                                className="w-full px-6 py-5 bg-[#050505] border border-pink-900/20 rounded-[2rem] text-zinc-300 text-xs focus:outline-none focus:border-pink-500/50 resize-none leading-relaxed"
+                              />
+                            </div>
+                          )}
+
+                          {/* 男性版本 */}
+                          {optimizedPrompts.male && (
+                            <div className="space-y-4">
+                              <div className="flex items-center justify-between px-2">
+                                <label className="text-[10px] text-blue-500 uppercase tracking-widest font-black flex items-center gap-2">
+                                  <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                                  男性场景渲染指令
+                                </label>
+                                <button onClick={() => setOptimizedPrompts(prev => ({ ...prev, male: null }))} className="text-[9px] text-zinc-700 hover:text-red-400 transition-colors uppercase font-black">丢弃</button>
+                              </div>
+                              <textarea
+                                value={optimizedPrompts.male}
+                                onChange={(e) => setOptimizedPrompts(prev => ({ ...prev, male: e.target.value }))}
+                                rows={6}
+                                className="w-full px-6 py-5 bg-[#050505] border border-blue-900/20 rounded-[2rem] text-zinc-300 text-xs focus:outline-none focus:border-blue-500/50 resize-none leading-relaxed"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 最终发布按钮 */}
+                        <button
+                          onClick={async () => {
+                            if (!newTemplateImage) { setError('请先上传模板示例图'); return; }
+                            if (!newTemplateName.trim()) { setError('请设置模板名称'); return; }
+                            try {
+                              const templateData = {
+                                id: editingTemplate?.id || Date.now().toString(),
                                 imageUrl: newTemplateImage,
-                                name: (newTemplateName || '新模板') + ' (女)',
+                                name: newTemplateName,
                                 description: newTemplateDesc || '',
-                                prompt: optimizedPrompts.female!,
+                                prompt: '',
+                                malePrompt: optimizedPrompts.male || null,
+                                femalePrompt: optimizedPrompts.female || null,
+                                defaultGender: templateDefaultGender,
                                 tags: newTemplateTags,
                                 variables: []
                               };
-                              await templateApi.create(newTpl);
+
+                              if (editingTemplate) {
+                                await templateApi.update(editingTemplate.id, templateData);
+                                alert('模板修改已同步');
+                              } else {
+                                await templateApi.create(templateData);
+                                alert('新模板已全网发布');
+                              }
                               await loadTemplates();
-                              alert('女性版本已发布');
+                              setEditingTemplate(null);
+                              setNewTemplateImage(null);
+                              setNewTemplateName('');
+                              setNewTemplateDesc('');
+                              setNewTemplatePrompt('');
+                              setNewTemplateTags([]);
+                              setOptimizedPrompts({ female: null, male: null });
+                              setShowOptimizedPrompts(false);
                             } catch (err: any) {
-                              setError(err.message || '发布失败');
+                              setError(err.message || '发布操作失败');
                             }
                           }}
-                          className="px-3 py-1 rounded-lg text-[9px] font-bold bg-pink-600 text-white hover:bg-pink-500"
+                          className={`w-full py-6 rounded-[2.5rem] text-[11px] font-black uppercase tracking-[0.2em] text-white shadow-2xl transition-all duration-700 hover:scale-[1.02] active:scale-95 ${optimizedPrompts.female && optimizedPrompts.male
+                            ? 'bg-gradient-to-r from-pink-600 via-indigo-600 to-blue-600 shadow-indigo-500/30'
+                            : optimizedPrompts.female
+                              ? 'bg-gradient-to-r from-pink-600 to-rose-600 shadow-pink-500/30'
+                              : 'bg-gradient-to-r from-indigo-600 to-blue-600 shadow-blue-500/30'
+                            }`}
                         >
-                          发布女性版本
+                          {editingTemplate ? '💾 立即同步所有修改' : '🚀 确认并完成最终发布'}
                         </button>
                       </div>
-                      <textarea
-                        value={optimizedPrompts.female}
-                        onChange={(e) => setOptimizedPrompts(prev => ({ ...prev, female: e.target.value }))}
-                        rows={5}
-                        className="w-full px-3 py-2 bg-zinc-900 border border-pink-900/30 rounded-xl text-white text-xs focus:outline-none focus:border-pink-500/50 resize-none"
-                      />
-                    </div>
-                  )}
-
-                  {/* 男性版本 */}
-                  {optimizedPrompts.male && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[10px] text-blue-400 uppercase tracking-widest font-black">👨 男性版本</label>
-                        <button
-                          onClick={async () => {
-                            if (!newTemplateImage) {
-                              setError('请先上传图片');
-                              return;
-                            }
-                            try {
-                              const newTpl: TemplateItem = {
-                                id: Date.now().toString() + '_male',
-                                imageUrl: newTemplateImage,
-                                name: (newTemplateName || '新模板') + ' (男)',
-                                description: newTemplateDesc || '',
-                                prompt: optimizedPrompts.male!,
-                                tags: newTemplateTags,
-                                variables: []
-                              };
-                              await templateApi.create(newTpl);
-                              await loadTemplates();
-                              alert('男性版本已发布');
-                            } catch (err: any) {
-                              setError(err.message || '发布失败');
-                            }
-                          }}
-                          className="px-3 py-1 rounded-lg text-[9px] font-bold bg-blue-600 text-white hover:bg-blue-500"
-                        >
-                          发布男性版本
-                        </button>
-                      </div>
-                      <textarea
-                        value={optimizedPrompts.male}
-                        onChange={(e) => setOptimizedPrompts(prev => ({ ...prev, male: e.target.value }))}
-                        rows={5}
-                        className="w-full px-3 py-2 bg-zinc-900 border border-blue-900/30 rounded-xl text-white text-xs focus:outline-none focus:border-blue-500/50 resize-none"
-                      />
-                    </div>
-                  )}
-
-                  {/* 同时发布两个版本 */}
-                  {optimizedPrompts.female && optimizedPrompts.male && (
-                    <button
-                      onClick={async () => {
-                        if (!newTemplateImage) {
-                          setError('请先上传图片');
-                          return;
-                        }
-                        try {
-                          // 发布女性版本
-                          await templateApi.create({
-                            id: Date.now().toString() + '_female',
-                            imageUrl: newTemplateImage,
-                            name: (newTemplateName || '新模板') + ' (女)',
-                            description: newTemplateDesc || '',
-                            prompt: optimizedPrompts.female!,
-                            tags: newTemplateTags,
-                            variables: []
-                          });
-                          // 发布男性版本
-                          await templateApi.create({
-                            id: (Date.now() + 1).toString() + '_male',
-                            imageUrl: newTemplateImage,
-                            name: (newTemplateName || '新模板') + ' (男)',
-                            description: newTemplateDesc || '',
-                            prompt: optimizedPrompts.male!,
-                            tags: newTemplateTags,
-                            variables: []
-                          });
-                          await loadTemplates();
-                          // 重置表单
-                          setNewTemplateImage(null);
-                          setNewTemplateName('');
-                          setNewTemplateDesc('');
-                          setNewTemplatePrompt('');
-                          setNewTemplateTags([]);
-                          setOptimizedPrompts({ female: null, male: null });
-                          setShowOptimizedPrompts(false);
-                          alert('两个版本都已发布');
-                        } catch (err: any) {
-                          setError(err.message || '发布失败');
-                        }
-                      }}
-                      className="w-full py-3 rounded-xl text-[10px] font-bold bg-gradient-to-r from-pink-600 to-blue-600 text-white hover:opacity-90"
-                    >
-                      同时发布男女两个版本
-                    </button>
-                  )}
+                    )}
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
+          )}
 
-            <Button onClick={handleAdminAddTemplate} className="w-full h-16 rounded-2xl">发布至模板广场</Button>
+          {/* 已发布模板管理 */}
+          {adminTab === 'templates' && (
+            <div className="space-y-10 animate-fade-in">
+              <div className="flex items-center justify-between border-b border-white/5 pb-6">
+                <div className="space-y-1">
+                  <h3 className="text-[11px] font-black uppercase tracking-widest text-white">已发布模板库 ({templates.length})</h3>
+                  <p className="text-[9px] text-zinc-600 uppercase tracking-widest leading-relaxed">管理您的所有创意资产与渲染预设</p>
+                </div>
+                <div className="flex gap-4">
+                  <div className="px-5 py-2.5 rounded-2xl bg-zinc-900 border border-white/5 text-[10px] text-zinc-500 font-black uppercase tracking-widest">
+                    按时间排序
+                  </div>
+                </div>
+              </div>
 
-            {/* 已上传列表 */}
-            <div className="space-y-4 pt-6">
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">已上传列表</h4>
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                 {templates.map(t => (
-                  <div key={t.id} className="p-4 bg-zinc-900/50 rounded-xl flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <img src={t.imageUrl} className="w-10 h-10 rounded-lg object-cover" />
-                      <div>
-                        <span className="text-xs font-bold text-zinc-300">{t.name}</span>
-                        <span className="ml-2 text-[9px] text-zinc-600 uppercase">{t.category}</span>
+                  <div key={t.id} className="glass-card group rounded-[3rem] overflow-hidden border border-white/5 hover:border-indigo-500/30 transition-all duration-700 shadow-2xl">
+                    {/* 模板图片预览 */}
+                    <div className="aspect-[3/4] relative overflow-hidden">
+                      <img src={t.imageUrl} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-60 group-hover:opacity-100 transition-opacity duration-700" />
+
+                      {/* 卡片顶部状态 */}
+                      <div className="absolute top-6 left-6 right-6 flex justify-between items-start opacity-0 group-hover:opacity-100 transform translate-y-2 group-hover:translate-y-0 transition-all duration-700 z-30">
+                        <div className="flex gap-1.5 flex-wrap max-w-[70%]">
+                          {t.tags.map(tagId => {
+                            const tag = allTags.find(tt => tt.id === tagId);
+                            return tag ? (
+                              <span key={tagId} className="px-3 py-1 rounded-full text-[8px] font-black text-white shadow-xl backdrop-blur-md" style={{ backgroundColor: `${tag.color}cc` }}>
+                                {tag.name}
+                              </span>
+                            ) : null;
+                          })}
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteTemplate(t.id);
+                          }}
+                          className="w-10 h-10 rounded-2xl bg-red-500/20 text-red-400 border border-red-500/30 flex items-center justify-center hover:bg-red-500 hover:text-white transition-all transform hover:rotate-12 pointer-events-auto"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+
+                      {/* 卡片底部详情 */}
+                      <div className="absolute bottom-8 left-8 right-8 space-y-4">
+                        <div className="space-y-1">
+                          <h4 className="text-xl font-bold text-white tracking-tight">{t.name}</h4>
+                          <p className="text-[10px] text-zinc-400 line-clamp-2 leading-relaxed font-medium">{t.description}</p>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 pt-2">
+                          {(t as any).defaultGender && (
+                            <span className={`px-2.5 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest shadow-xl ${(t as any).defaultGender === 'female' ? 'bg-pink-600/20 text-pink-400 border border-pink-500/20' : 'bg-blue-600/20 text-blue-400 border border-blue-500/20'}`}>
+                              {(t as any).defaultGender === 'female' ? 'Woman' : 'Man'}
+                            </span>
+                          )}
+                          {t.malePrompt && t.femalePrompt && (
+                            <span className="px-2.5 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest bg-green-600/20 text-green-400 border border-green-500/20 shadow-xl">
+                              ✓ 双版本
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 悬浮编辑层 */}
+                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-700 backdrop-blur-[2px] pointer-events-none group-hover:pointer-events-auto">
+                        <button
+                          onClick={() => {
+                            setEditingTemplate(t);
+                            setNewTemplateImage(t.imageUrl);
+                            setNewTemplateName(t.name);
+                            setNewTemplateDesc(t.description);
+                            setNewTemplateTags(t.tags);
+                            setTemplateDefaultGender((t as any).defaultGender || 'female');
+                            if (t.malePrompt || t.femalePrompt) {
+                              setOptimizedPrompts({ male: t.malePrompt || null, female: t.femalePrompt || null });
+                              setShowOptimizedPrompts(true);
+                            } else {
+                              setNewTemplatePrompt(t.prompt);
+                            }
+                            setAdminTab('create');
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }}
+                          className="px-10 py-4 rounded-full bg-white text-black text-[11px] font-black uppercase tracking-[0.2em] shadow-2xl hover:scale-110 active:scale-95 transition-all transform translate-y-10 group-hover:translate-y-0 duration-700"
+                        >
+                          立即进入编辑
+                        </button>
                       </div>
                     </div>
-                    <button onClick={() => handleDeleteTemplate(t.id)} className="text-red-900 text-[10px] font-black uppercase hover:text-red-500 transition-colors">删除</button>
                   </div>
                 ))}
               </div>
+
+              {templates.length === 0 && (
+                <div className="py-20 text-center space-y-6 glass-card rounded-[3.5rem] border border-white/5 mx-auto max-w-lg">
+                  <div className="w-20 h-20 rounded-full bg-zinc-900 mx-auto flex items-center justify-center border border-white/5">
+                    <span className="text-3xl grayscale">🗄️</span>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-white text-sm font-bold">暂无已发布模板</p>
+                    <p className="text-zinc-500 text-[10px] uppercase tracking-widest leading-relaxed">您的创意库正在等待第一个作品的加入</p>
+                  </div>
+                  <button onClick={() => setAdminTab('create')} className="px-8 py-3 rounded-2xl bg-white text-black text-[10px] font-black uppercase tracking-widest">去发布新模板</button>
+                </div>
+              )}
             </div>
-          </div>
+          )}
+
+          {/* 标签管理 */}
+          {adminTab === 'tags' && (
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-10 animate-fade-in items-start">
+              {/* 左侧：标签添加/编辑 */}
+              <div className="xl:col-span-5 space-y-8 sticky top-10">
+                <div className="glass-card rounded-[3.5rem] p-10 border border-white/5 space-y-10 shadow-2xl">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm">🏷️</span>
+                      <h3 className="text-[11px] font-black uppercase tracking-widest text-white">
+                        {editingTag ? '重塑标签定义' : '构筑新分类标签'}
+                      </h3>
+                    </div>
+                    <p className="text-[9px] text-zinc-600 uppercase tracking-widest pl-7">这决定了用户在探索页面时的视觉归类</p>
+                  </div>
+
+                  <div className="space-y-6 pt-6 border-t border-white/5">
+                    <div className="space-y-4">
+                      <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black px-1">标签显示名称</label>
+                      <input
+                        type="text"
+                        value={editingTag ? editingTag.name : newTagName}
+                        onChange={(e) => editingTag ? setEditingTag({ ...editingTag, name: e.target.value }) : setNewTagName(e.target.value)}
+                        className="w-full px-6 py-4 bg-[#080808] border border-white/5 rounded-2xl text-white text-sm focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 transition-all placeholder:text-zinc-800"
+                        placeholder="例如：米兰秋季、高奢、街头反叛"
+                      />
+                    </div>
+
+                    <div className="space-y-4">
+                      <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black px-1">赋予色彩灵魂</label>
+                      <div className="flex gap-4">
+                        <div className="relative group">
+                          <input
+                            type="color"
+                            value={editingTag ? editingTag.color : newTagColor}
+                            onChange={(e) => editingTag ? setEditingTag({ ...editingTag, color: e.target.value }) : setNewTagColor(e.target.value)}
+                            className="w-20 h-20 rounded-[2rem] cursor-pointer border-4 border-[#080808] bg-transparent group-hover:scale-105 transition-transform"
+                          />
+                        </div>
+                        <div
+                          className="flex-1 h-20 rounded-[2rem] flex items-center justify-center text-white text-[11px] font-black uppercase tracking-[0.2em] shadow-xl animate-fade-in border border-white/10"
+                          style={{ backgroundColor: editingTag ? editingTag.color : newTagColor }}
+                        >
+                          {editingTag ? editingTag.name || '命题预览' : newTagName || '命题预览'}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-6 gap-2 pt-2">
+                        {['#6366f1', '#ec4899', '#f97316', '#10b981', '#06b6d4', '#8b5cf6'].map(c => (
+                          <button
+                            key={c}
+                            onClick={() => editingTag ? setEditingTag({ ...editingTag, color: c }) : setNewTagColor(c)}
+                            className={`aspect-square rounded-full border-2 transition-all ${c === (editingTag ? editingTag.color : newTagColor) ? 'border-white scale-110 shadow-lg' : 'border-transparent hover:scale-110'}`}
+                            style={{ backgroundColor: c }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-8 space-y-4">
+                      {editingTag ? (
+                        <div className="flex gap-3">
+                          <button
+                            onClick={async () => {
+                              try {
+                                await tagApi.update(editingTag.id, editingTag.name, editingTag.color);
+                                await loadTags();
+                                setEditingTag(null);
+                                alert('标签定义已更新');
+                              } catch (err: any) { setError(err.message || '更新失败'); }
+                            }}
+                            className="flex-1 py-5 rounded-[2rem] bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest shadow-xl shadow-indigo-900/40 hover:bg-indigo-500 transition-all active:scale-95"
+                          >
+                            同步修改
+                          </button>
+                          <button
+                            onClick={() => { setEditingTag(null); setNewTagName(''); }}
+                            className="px-8 py-5 rounded-[2rem] bg-zinc-900 border border-white/5 text-zinc-500 text-[10px] font-black uppercase tracking-widest hover:text-white transition-all active:scale-95"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            if (!newTagName.trim()) { setError('请先赋名'); return; }
+                            try {
+                              await tagApi.create(newTagName, newTagColor);
+                              await loadTags();
+                              setNewTagName('');
+                              alert('新分类标签已激活');
+                            } catch (err: any) { setError(err.message || '创建失败'); }
+                          }}
+                          className="w-full py-5 rounded-[2rem] bg-white text-black text-[10px] font-black uppercase tracking-widest shadow-xl hover:bg-zinc-100 transition-all active:scale-95"
+                        >
+                          激活新分类
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 右侧：标签列表库 */}
+              <div className="xl:col-span-7 space-y-6">
+                <div className="flex items-center justify-between border-b border-white/5 pb-6">
+                  <h4 className="text-[11px] font-black uppercase tracking-widest text-zinc-500 pl-2">全站分类图谱 ({allTags.length})</h4>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {allTags.map(tag => (
+                    <div
+                      key={tag.id}
+                      className="glass-card group p-6 rounded-[2.5rem] flex items-center justify-between border border-white/5 hover:border-white/20 transition-all duration-500 shadow-xl"
+                    >
+                      <div className="flex items-center gap-5">
+                        <div
+                          className="w-14 h-14 rounded-2xl flex items-center justify-center text-white font-black text-sm shadow-xl transition-transform group-hover:rotate-6"
+                          style={{ backgroundColor: tag.color }}
+                        >
+                          {tag.name.substring(0, 1).toUpperCase()}
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-sm font-bold text-white tracking-tight">{tag.name}</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: tag.color }}></div>
+                            <p className="text-[9px] text-zinc-600 font-black uppercase tracking-widest">{tag.color}</p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => { setEditingTag(tag); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                          className="px-5 py-3 rounded-xl bg-zinc-900 border border-white/5 text-[9px] font-black uppercase tracking-widest text-zinc-500 hover:text-white hover:bg-zinc-800 transition-all"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (confirm(`确定要抹除标签"${tag.name}"吗？这将影响所有使用该标签的模板。`)) {
+                              try {
+                                await tagApi.delete(tag.id);
+                                await loadTags();
+                              } catch (err: any) { setError(err.message || '抹除失败'); }
+                            }
+                          }}
+                          className="px-4 py-3 rounded-xl bg-red-900/10 text-red-500/50 hover:text-red-400 hover:bg-red-900/20 transition-all"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {allTags.length === 0 && (
+                    <div className="col-span-full py-20 text-center glass-card rounded-[3.5rem] border border-white/5 border-dashed">
+                      <p className="text-zinc-600 text-[10px] font-black uppercase tracking-widest">目前还没有建立任何分类体系</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1530,8 +2016,8 @@ const App: React.FC = () => {
       </aside>
 
       {/* 主内容区 */}
-      <main className="flex-1 flex flex-col min-h-screen">
-        <div className="container mx-auto px-6 py-12 lg:px-20 lg:py-20">
+      <main className="flex-1 flex flex-col min-h-screen pb-20 lg:pb-0">
+        <div className="container mx-auto px-4 py-6 lg:px-20 lg:py-20">
           <Routes>
             <Route path="/login" element={
               <AuthPage
@@ -1629,35 +2115,204 @@ const App: React.FC = () => {
             <Route path="/templates" element={renderTemplateGallery()} />
             <Route path="/admin" element={renderAdmin()} />
             <Route path="/gallery" element={
-              <div className="space-y-12 animate-fade-in pb-20">
-                <div className="space-y-4 text-center max-w-xl mx-auto">
-                  <h2 className="text-5xl font-serif italic text-white">作品集</h2>
-                  <p className="text-zinc-500 text-xs uppercase tracking-[0.3em] font-black">Your Creative Gallery</p>
+              <div className="space-y-8 lg:space-y-12 animate-fade-in pb-20">
+                <div className="space-y-2 lg:space-y-4 text-center max-w-xl mx-auto">
+                  <h2 className="text-3xl lg:text-5xl font-serif italic text-white">作品集</h2>
+                  <p className="text-zinc-500 text-[10px] lg:text-xs uppercase tracking-[0.2em] lg:tracking-[0.3em] font-black">Your Creative Gallery</p>
+
+                  {/* 视图切换 - 所有登录用户都能看到 */}
+                  <div className="flex justify-center mt-6 lg:mt-8">
+                    <div className="inline-flex p-1 bg-zinc-900 rounded-xl lg:rounded-2xl border border-white/5 shadow-xl lg:shadow-2xl">
+                      <button
+                        onClick={() => setGalleryViewMode('mine')}
+                        className={`px-4 lg:px-6 py-2 rounded-lg lg:rounded-xl text-[9px] lg:text-[10px] font-black uppercase tracking-wider lg:tracking-widest transition-all ${galleryViewMode === 'mine' ? 'bg-white text-black shadow-lg scale-[1.02]' : 'text-zinc-500 hover:text-white'}`}
+                      >
+                        🔒 我的作品
+                      </button>
+                      <button
+                        onClick={() => setGalleryViewMode('community')}
+                        className={`px-4 lg:px-6 py-2 rounded-lg lg:rounded-xl text-[9px] lg:text-[10px] font-black uppercase tracking-wider lg:tracking-widest transition-all ${galleryViewMode === 'community' ? 'bg-white text-black shadow-lg scale-[1.02]' : 'text-zinc-500 hover:text-white'}`}
+                      >
+                        🌐 社区作品
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                {!currentUser ? (
-                  <div className="ios-card p-16 text-center space-y-6">
-                    <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">登录后查看您的作品</p>
-                    <Button onClick={() => navigate('/login')} className="mx-auto rounded-2xl">
-                      立即登录
-                    </Button>
-                  </div>
-                ) : userHistory.length === 0 ? (
-                  <div className="ios-card p-16 text-center">
-                    <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">暂无作品，开始创作吧</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
-                    {userHistory.map(img => (
-                      <div key={img.id} className="group relative aspect-[3/4] rounded-[2rem] overflow-hidden border border-white/5 hover:border-white/20 transition-all duration-500">
-                        <img src={img.url} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                        <div className="absolute bottom-6 left-6 right-6 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-black">{img.type}</p>
-                          <p className="text-[9px] text-zinc-600 mt-1">{new Date(img.timestamp).toLocaleString()}</p>
-                        </div>
+
+                {/* 我的作品视图 */}
+                {galleryViewMode === 'mine' && (
+                  <>
+                    {!currentUser ? (
+                      <div className="ios-card p-16 text-center space-y-6">
+                        <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">登录后查看您的作品</p>
+                        <Button onClick={() => navigate('/login')} className="mx-auto rounded-2xl">
+                          立即登录
+                        </Button>
                       </div>
-                    ))}
-                  </div>
+                    ) : userHistory.length === 0 ? (
+                      <div className="ios-card p-16 text-center">
+                        <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">暂无作品，开始创作吧</p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-8">
+                        {userHistory.map(img => (
+                          <div key={img.id} className="group relative rounded-xl lg:rounded-[2rem] overflow-hidden border border-white/5 hover:border-white/20 transition-all duration-500 bg-zinc-900/50">
+                            {/* 图片区域 */}
+                            <div className="aspect-[3/4] relative">
+                              <img src={img.thumbnailUrl || img.url} className="w-full h-full object-cover" />
+
+                              {/* 公开状态标识 */}
+                              <div className="absolute top-4 right-4">
+                                {img.isPublic ? (
+                                  <span className="px-3 py-1 rounded-full bg-green-500/20 text-green-400 text-[9px] font-bold border border-green-500/30 backdrop-blur-sm">
+                                    🌐 已公开
+                                  </span>
+                                ) : (
+                                  <span className="px-3 py-1 rounded-full bg-zinc-800/80 text-zinc-400 text-[9px] font-bold border border-white/10 backdrop-blur-sm">
+                                    🔒 私有
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* 悬浮层 */}
+                              <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+
+                              {/* 底部信息 */}
+                              <div className="absolute bottom-4 left-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-black">{img.type}</p>
+                                <p className="text-[9px] text-zinc-600 mt-1">{new Date(img.timestamp).toLocaleString()}</p>
+                              </div>
+                            </div>
+
+                            {/* Prompt 展示区域 */}
+                            {img.prompt && (
+                              <div className="p-4 border-t border-white/5">
+                                <button
+                                  onClick={() => setExpandedPromptId(expandedPromptId === img.id ? null : img.id)}
+                                  className="w-full text-left flex items-center justify-between"
+                                >
+                                  <span className="text-[9px] text-zinc-500 uppercase tracking-widest font-black">📝 Prompt</span>
+                                  <span className="text-zinc-600 text-xs">{expandedPromptId === img.id ? '▲' : '▼'}</span>
+                                </button>
+                                {expandedPromptId === img.id && (
+                                  <p className="text-[10px] text-zinc-400 mt-2 leading-relaxed line-clamp-4 break-words">
+                                    {img.prompt}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* 操作按钮 */}
+                            <div className="p-4 pt-0 flex flex-wrap gap-2">
+                              <button
+                                onClick={() => handleDownload(img.url, `lyra-${img.id}.png`)}
+                                className="flex-1 py-2 rounded-xl bg-white text-black text-[10px] font-bold text-center hover:bg-zinc-200 transition-colors"
+                              >
+                                ⬇️ 下载
+                              </button>
+                              <button
+                                onClick={() => handleShareImage(img.id, !img.isPublic)}
+                                className={`flex-1 py-2 rounded-xl text-[10px] font-bold text-center transition-colors ${img.isPublic
+                                  ? 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
+                                  : 'bg-green-600/20 text-green-400 border border-green-500/30 hover:bg-green-600/30'
+                                  }`}
+                              >
+                                {img.isPublic ? '🔒 设为私有' : '🌐 分享到社区'}
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  if (!confirm('确定要删除这张图片吗？')) return;
+                                  try {
+                                    const res = await fetch(`/api/user/history/${img.id}`, {
+                                      method: 'DELETE',
+                                      headers: { 'Authorization': `Bearer ${localStorage.getItem('lyra_auth_token')}` }
+                                    });
+                                    if (res.ok) {
+                                      setUserHistory(prev => prev.filter(h => h.id !== img.id));
+                                    } else {
+                                      alert('删除失败');
+                                    }
+                                  } catch (err) {
+                                    alert('删除失败');
+                                  }
+                                }}
+                                className="px-4 py-2 rounded-xl bg-red-900/50 text-red-300 text-[10px] font-bold hover:bg-red-900 transition-colors"
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* 社区作品视图 */}
+                {galleryViewMode === 'community' && (
+                  <>
+                    {publicGallery.length === 0 ? (
+                      <div className="ios-card p-16 text-center">
+                        <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">社区还没有公开作品</p>
+                        <p className="text-zinc-700 text-[9px] mt-2">成为第一个分享作品的创作者吧!</p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-8">
+                        {publicGallery.map(img => (
+                          <div key={img.id} className="group relative rounded-xl lg:rounded-[2rem] overflow-hidden border border-white/5 hover:border-white/20 transition-all duration-500 bg-zinc-900/50">
+                            {/* 图片区域 */}
+                            <div className="aspect-[3/4] relative">
+                              <img src={img.thumbnailUrl || img.url} className="w-full h-full object-cover" />
+
+                              {/* 作者标识 */}
+                              <div className="absolute top-4 left-4">
+                                <span className="px-3 py-1 rounded-full bg-zinc-900/80 text-zinc-300 text-[9px] font-bold border border-white/10 backdrop-blur-sm">
+                                  👤 {img.username || '匿名'}
+                                </span>
+                              </div>
+
+                              {/* 悬浮层 */}
+                              <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+
+                              {/* 底部信息 */}
+                              <div className="absolute bottom-4 left-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-black">{img.type}</p>
+                                <p className="text-[9px] text-zinc-600 mt-1">{new Date(img.timestamp).toLocaleString()}</p>
+                              </div>
+                            </div>
+
+                            {/* Prompt 展示区域 */}
+                            {img.prompt && (
+                              <div className="p-4 border-t border-white/5">
+                                <button
+                                  onClick={() => setExpandedPromptId(expandedPromptId === img.id ? null : img.id)}
+                                  className="w-full text-left flex items-center justify-between"
+                                >
+                                  <span className="text-[9px] text-zinc-500 uppercase tracking-widest font-black">📝 Prompt</span>
+                                  <span className="text-zinc-600 text-xs">{expandedPromptId === img.id ? '▲' : '▼'}</span>
+                                </button>
+                                {expandedPromptId === img.id && (
+                                  <p className="text-[10px] text-zinc-400 mt-2 leading-relaxed line-clamp-4 break-words">
+                                    {img.prompt}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* 操作按钮 */}
+                            <div className="p-4 pt-0 flex gap-2">
+                              <button
+                                onClick={() => handleDownload(img.url, `lyra-${img.id}.png`)}
+                                className="flex-1 py-2 rounded-xl bg-white text-black text-[10px] font-bold text-center hover:bg-zinc-200 transition-colors"
+                              >
+                                ⬇️ 下载
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             } />
@@ -1695,10 +2350,30 @@ const App: React.FC = () => {
                   {mode === AppMode.DASHBOARD && (
                     <div className="space-y-10">
                       <h2 className="text-6xl font-black italic font-serif text-white">开始创作</h2>
-                      <div className="grid gap-6">
-                        <FeatureCard title="商业模特试戴" description="一键配置模特属性，支持物理光影锁定与折射追踪。" icon={<IconModel />} onClick={() => setMode(AppMode.MODEL_CONFIG)} />
-                        <FeatureCard title="从模板生成" description="套用高质量大师模板，一键获得品牌级视觉效果。" icon={<IconPoster />} onClick={() => navigate('/templates')} />
-                      </div>
+                      {!imageBase64 ? (
+                        <div className="p-8 bg-zinc-900/50 border border-white/10 rounded-2xl text-center space-y-6">
+                          <div className="w-16 h-16 mx-auto rounded-full bg-yellow-500/10 flex items-center justify-center">
+                            <svg className="w-8 h-8 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                          </div>
+                          <div>
+                            <h3 className="text-xl font-bold text-white mb-2">请先上传眼镜图片</h3>
+                            <p className="text-sm text-zinc-400">请点击左侧的"上传眼镜 PNG/JPG"按钮上传您的眼镜产品图</p>
+                          </div>
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="px-8 py-4 bg-white text-black rounded-2xl font-bold hover:bg-zinc-200 transition-colors"
+                          >
+                            立即上传
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="grid gap-6">
+                          <FeatureCard title="商业模特试戴" description="一键配置模特属性，支持物理光影锁定与折射追踪。" icon={<IconModel />} onClick={() => setMode(AppMode.MODEL_CONFIG)} />
+                          <FeatureCard title="从模板生成" description="套用高质量大师模板，一键获得品牌级视觉效果。" icon={<IconPoster />} onClick={() => navigate('/templates')} />
+                        </div>
+                      )}
                     </div>
                   )}
                   {mode === AppMode.MODEL_CONFIG && renderConfig()}
@@ -1822,47 +2497,62 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* 移动端底部导航栏 */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-zinc-950/95 backdrop-blur-xl border-t border-white/10 z-[100] safe-area-bottom">
+        <div className="flex items-center justify-around px-2 py-2">
+          {/* 创作工坊 */}
+          <button
+            onClick={() => { navigate('/'); setMode(AppMode.DASHBOARD); }}
+            className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${location.pathname === '/' ? 'text-white' : 'text-zinc-500'
+              }`}
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.53 16.122a3 3 0 00-5.78 1.128 2.25 2.25 0 01-2.4 2.245 4.5 4.5 0 008.4-2.245c0-.399-.078-.78-.22-1.128zm0 0a15.998 15.998 0 003.388-1.62m-5.043-.025a15.994 15.994 0 011.622-3.395m3.42 3.42a15.995 15.995 0 004.764-4.648l3.876-5.814a1.151 1.151 0 00-1.597-1.597L14.146 6.32a15.996 15.996 0 00-4.649 4.764m3.42 3.42a6.776 6.776 0 00-3.42-3.42" />
+            </svg>
+            <span className="text-[9px] font-bold">创作</span>
+          </button>
+
+          {/* 模板广场 */}
+          <button
+            onClick={() => navigate('/templates')}
+            className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${location.pathname === '/templates' ? 'text-white' : 'text-zinc-500'
+              }`}
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+            </svg>
+            <span className="text-[9px] font-bold">模板</span>
+          </button>
+
+          {/* 作品集 */}
+          <button
+            onClick={() => navigate('/gallery')}
+            className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${location.pathname === '/gallery' ? 'text-white' : 'text-zinc-500'
+              }`}
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+            </svg>
+            <span className="text-[9px] font-bold">作品</span>
+          </button>
+
+          {/* 用户/登录 */}
+          <button
+            onClick={() => currentUser ? navigate('/settings') : navigate('/login')}
+            className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${location.pathname === '/settings' || location.pathname === '/login' ? 'text-white' : 'text-zinc-500'
+              }`}
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+            </svg>
+            <span className="text-[9px] font-bold">{currentUser ? '我的' : '登录'}</span>
+          </button>
+        </div>
+      </nav>
+
       {error && <div className="fixed bottom-10 left-1/2 -translate-x-1/2 ios-glass px-10 py-6 rounded-3xl text-red-400 text-[10px] font-black z-[500] uppercase tracking-widest border-red-900/20">{error}</div>}
     </div>
   );
 };
-
-// 辅助图标
-const IconSettings = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
-);
-
-const NavItem = ({ active, onClick, icon, label }: any) => (
-  <div onClick={onClick} className={`flex items-center gap-5 px-6 py-5 rounded-2xl cursor-pointer transition-all duration-300 ${active ? 'bg-white text-black font-bold scale-[1.02] shadow-xl' : 'text-zinc-600 hover:text-white hover:bg-white/5'}`}>
-    {icon} <span className="text-[10px] tracking-[0.2em] uppercase font-black">{label}</span>
-  </div>
-);
-
-const SelectorGroup = ({ title, icon, color, children }: any) => (
-  <div className="space-y-10 p-10 bg-zinc-900/10 rounded-[3rem] border border-white/[0.03] shadow-inner">
-    <div className="flex items-center gap-4">
-      <div className={`p-3 rounded-2xl ${color} bg-opacity-10 flex items-center justify-center border border-current/10`}>{icon}</div>
-      <h3 className="text-[13px] font-black uppercase tracking-[0.2em] text-white/90">{title}</h3>
-    </div>
-    <div className="space-y-12">{children}</div>
-  </div>
-);
-
-const Selector = ({ label, options, current, onChange, labelMap }: any) => (
-  <div className="flex flex-col gap-5">
-    <label className="text-[10px] text-zinc-600 uppercase tracking-widest font-black">{label}</label>
-    <div className="flex flex-wrap gap-3">
-      {options.map((opt: string) => (
-        <button
-          key={opt}
-          onClick={() => onChange(opt)}
-          className={`px-5 py-4 rounded-2xl text-[10px] font-bold border transition-all duration-500 ${current === opt ? 'bg-white text-black border-white shadow-xl scale-105' : 'bg-zinc-950/40 text-zinc-500 border-white/5 hover:border-white/20'}`}
-        >
-          {labelMap ? (labelMap[opt] || opt) : opt}
-        </button>
-      ))}
-    </div>
-  </div>
-);
 
 export default App;

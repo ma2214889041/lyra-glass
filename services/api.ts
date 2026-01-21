@@ -223,9 +223,24 @@ export const generateApi = {
 // ========== 用户数据 API ==========
 
 export const userApi = {
-  getHistory: async (): Promise<GeneratedImage[]> => {
-    const result = await request<{ success: boolean; images: GeneratedImage[] }>('/user/history');
+  getHistory: async (view?: 'all' | 'mine'): Promise<GeneratedImage[]> => {
+    const query = view ? `?view=${view}` : '';
+    const result = await request<{ success: boolean; images: GeneratedImage[] }>(`/user/history${query}`);
     return result.images;
+  },
+
+  // 获取社区公开作品
+  getPublicGallery: async (): Promise<GeneratedImage[]> => {
+    const result = await request<{ success: boolean; images: GeneratedImage[] }>('/gallery/public');
+    return result.images;
+  },
+
+  // 分享/取消分享作品
+  shareImage: async (imageId: string, isPublic: boolean): Promise<{ success: boolean; message: string }> => {
+    return request(`/user/history/${imageId}/share`, {
+      method: 'POST',
+      body: JSON.stringify({ isPublic }),
+    });
   },
 
   // 收藏相关

@@ -36,12 +36,23 @@ db.exec(`
     created_at INTEGER DEFAULT (strftime('%s', 'now'))
   );
 
+  CREATE TABLE IF NOT EXISTS assets (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    thumbnail_url TEXT,
+    type TEXT DEFAULT 'image',
+    created_at INTEGER DEFAULT (strftime('%s', 'now'))
+  );
+
   CREATE TABLE IF NOT EXISTS generated_images (
     id TEXT PRIMARY KEY,
     url TEXT NOT NULL,
+    thumbnail_url TEXT,
     type TEXT NOT NULL,
     config TEXT,
     user_id INTEGER,
+    prompt TEXT,
     created_at INTEGER DEFAULT (strftime('%s', 'now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
@@ -131,6 +142,49 @@ try {
 try {
   db.exec(`ALTER TABLE generated_images ADD COLUMN prompt TEXT`);
 } catch (e) { }
+try {
+  db.exec(`ALTER TABLE generated_images ADD COLUMN thumbnail_url TEXT`);
+} catch (e) { }
+
+// 添加模板的 male/female prompt 和默认配置
+try {
+  db.exec(`ALTER TABLE templates ADD COLUMN male_prompt TEXT`);
+} catch (e) { }
+try {
+  db.exec(`ALTER TABLE templates ADD COLUMN female_prompt TEXT`);
+} catch (e) { }
+try {
+  db.exec(`ALTER TABLE templates ADD COLUMN default_gender TEXT DEFAULT 'female'`);
+} catch (e) { }
+try {
+  db.exec(`ALTER TABLE templates ADD COLUMN default_framing TEXT DEFAULT 'Close-up'`);
+} catch (e) { }
+
+// 添加文字和标题选项
+try {
+  db.exec(`ALTER TABLE templates ADD COLUMN has_text BOOLEAN DEFAULT 0`);
+  console.log('✅ 已添加 has_text 字段');
+} catch (e) { }
+try {
+  db.exec(`ALTER TABLE templates ADD COLUMN has_title BOOLEAN DEFAULT 0`);
+  console.log('✅ 已添加 has_title 字段');
+} catch (e) { }
+
+// 添加作品公开状态字段（默认私有）
+try {
+  db.exec(`ALTER TABLE generated_images ADD COLUMN is_public INTEGER DEFAULT 0`);
+  console.log('✅ 已添加 is_public 字段');
+} catch (e) { }
+
+// 性能优化：添加索引
+try {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_images_user_created ON generated_images(user_id, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_prompt_history_user ON prompt_history(user_id, created_at DESC)`);
+  console.log('✅ 数据库索引创建完成');
+} catch (e) {
+  console.error('索引创建失败:', e);
+}
 
 // 插入默认标签（如果不存在）
 const defaultTags = [
@@ -153,9 +207,16 @@ export const tagDb = {
 
   create: (tag) => {
     const id = tag.id || Date.now().toString();
+    const name = tag.name;
+    const color = tag.color || '#6366f1';
+
+    if (!name) {
+      throw new Error('Tag name is required');
+    }
+
     const stmt = db.prepare('INSERT INTO tags (id, name, color) VALUES (?, ?, ?)');
-    stmt.run(id, tag.name, tag.color || '#6366f1');
-    return { id, ...tag };
+    stmt.run(id, name, color);
+    return { id, name, color };
   },
 
   update: (id, updates) => {
@@ -181,6 +242,8 @@ export const templateDb = {
       description: row.description,
       imageUrl: row.image_url,
       prompt: row.prompt || '',
+      malePrompt: row.male_prompt || null,
+      femalePrompt: row.female_prompt || null,
       tags: JSON.parse(row.tags || '[]'),
       variables: JSON.parse(row.variables || '[]')
     }));
@@ -201,6 +264,9 @@ export const templateDb = {
       description: row.description,
       imageUrl: row.image_url,
       prompt: row.prompt || '',
+      malePrompt: row.male_prompt || null,
+      femalePrompt: row.female_prompt || null,
+      defaultGender: row.default_gender || 'female',
       tags: JSON.parse(row.tags || '[]'),
       variables: JSON.parse(row.variables || '[]')
     };
@@ -208,8 +274,8 @@ export const templateDb = {
 
   create: (template) => {
     const stmt = db.prepare(`
-      INSERT INTO templates (id, name, description, image_url, prompt, tags, variables)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO templates (id, name, description, image_url, prompt, male_prompt, female_prompt, default_gender, tags, variables)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       template.id,
@@ -217,6 +283,9 @@ export const templateDb = {
       template.description,
       template.imageUrl,
       template.prompt || '',
+      template.malePrompt || null,
+      template.femalePrompt || null,
+      template.defaultGender || 'female',
       JSON.stringify(template.tags || []),
       JSON.stringify(template.variables || [])
     );
@@ -230,7 +299,9 @@ export const templateDb = {
     const updated = { ...current, ...updates };
     const stmt = db.prepare(`
       UPDATE templates
-      SET name = ?, description = ?, image_url = ?, prompt = ?, tags = ?, variables = ?, updated_at = strftime('%s', 'now')
+      SET name = ?, description = ?, image_url = ?, prompt = ?, male_prompt = ?, female_prompt = ?, 
+          default_gender = ?,
+          tags = ?, variables = ?, updated_at = strftime('%s', 'now')
       WHERE id = ?
     `);
     stmt.run(
@@ -238,6 +309,9 @@ export const templateDb = {
       updated.description,
       updated.imageUrl,
       updated.prompt || '',
+      updated.malePrompt || null,
+      updated.femalePrompt || null,
+      updated.defaultGender || 'female',
       JSON.stringify(updated.tags || []),
       JSON.stringify(updated.variables || []),
       id
@@ -318,35 +392,61 @@ export const sessionDb = {
   }
 };
 
+
 // 生成图片记录
 export const imageDb = {
-  save: (image, userId = null) => {
+  save: async (image, userId = null) => {
+    // 直接保存数据库记录，不再重复保存文件
+    // 调用方应该先调用 saveImage() 保存文件，然后传入 url 和 thumbnailUrl
+    const finalUrl = image.url;
+    const thumbnailUrl = image.thumbnailUrl || null;
+
     const stmt = db.prepare(`
-      INSERT INTO generated_images (id, url, type, config, user_id, prompt)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO generated_images (id, url, thumbnail_url, type, config, user_id, prompt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(image.id, image.url, image.type, JSON.stringify(image.config || {}), userId, image.prompt || null);
-    return { ...image, userId };
+    stmt.run(image.id, finalUrl, thumbnailUrl, image.type, JSON.stringify(image.config || {}), userId, image.prompt || null);
+    return { ...image, url: finalUrl, thumbnailUrl, userId };
   },
+
 
   getAll: (limit = 50) => {
     return db.prepare('SELECT * FROM generated_images ORDER BY created_at DESC LIMIT ?').all(limit);
   },
 
   getByUserId: (userId, limit = 50) => {
-    const rows = db.prepare(`
-      SELECT id, url, type, config, prompt, created_at
-      FROM generated_images
-      WHERE user_id = ?
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(userId, limit);
+    let query, params;
+
+    if (userId === null || userId === undefined) {
+      // 获取所有记录（管理员使用）
+      query = `
+        SELECT id, url, thumbnail_url, type, config, prompt, created_at, user_id, is_public
+        FROM generated_images
+        ORDER BY created_at DESC
+        LIMIT ?
+      `;
+      params = [limit];
+    } else {
+      // 获取特定用户的记录
+      query = `
+        SELECT id, url, thumbnail_url, type, config, prompt, created_at, user_id, is_public
+        FROM generated_images
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+      `;
+      params = [userId, limit];
+    }
+
+    const rows = db.prepare(query).all(...params);
     return rows.map(row => ({
       id: row.id,
       url: row.url,
+      thumbnailUrl: row.thumbnail_url,
       type: row.type,
       config: row.config ? JSON.parse(row.config) : null,
       prompt: row.prompt || null,
+      isPublic: row.is_public === 1,
       timestamp: row.created_at * 1000
     }));
   },
@@ -370,6 +470,82 @@ export const imageDb = {
       userId: row.user_id,
       timestamp: row.created_at * 1000
     };
+  },
+
+  delete: (imageId) => {
+    const stmt = db.prepare('DELETE FROM generated_images WHERE id = ?');
+    stmt.run(imageId);
+  },
+
+  // 获取公开作品（社区画廊）
+  getPublicImages: (limit = 50) => {
+    const query = `
+      SELECT gi.id, gi.url, gi.thumbnail_url, gi.type, gi.config, gi.prompt, 
+             gi.created_at, gi.user_id, gi.is_public, u.username
+      FROM generated_images gi
+      LEFT JOIN users u ON gi.user_id = u.id
+      WHERE gi.is_public = 1
+      ORDER BY gi.created_at DESC
+      LIMIT ?
+    `;
+    const rows = db.prepare(query).all(limit);
+    return rows.map(row => ({
+      id: row.id,
+      url: row.url,
+      thumbnailUrl: row.thumbnail_url,
+      type: row.type,
+      config: row.config ? JSON.parse(row.config) : null,
+      prompt: row.prompt || null,
+      timestamp: row.created_at * 1000,
+      isPublic: true,
+      username: row.username || '匿名用户'
+    }));
+  },
+
+  // 设置作品公开状态
+  setPublic: (imageId, isPublic, userId) => {
+    // 验证所有权
+    const image = db.prepare('SELECT user_id FROM generated_images WHERE id = ?').get(imageId);
+    if (!image || image.user_id !== userId) {
+      return { success: false, error: '无权操作此图片' };
+    }
+
+    const stmt = db.prepare('UPDATE generated_images SET is_public = ? WHERE id = ?');
+    const result = stmt.run(isPublic ? 1 : 0, imageId);
+    return { success: result.changes > 0 };
+  }
+};
+
+// 资源管理 DB
+export const assetDb = {
+  getAll: () => {
+    const rows = db.prepare('SELECT * FROM assets ORDER BY created_at DESC').all();
+    return rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      url: row.url,
+      thumbnailUrl: row.thumbnail_url,
+      type: row.type || 'image',
+      timestamp: row.created_at * 1000
+    }));
+  },
+
+  add: (asset) => {
+    const stmt = db.prepare(`
+      INSERT INTO assets (id, name, url, thumbnail_url, type)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    stmt.run(asset.id, asset.name, asset.url, asset.thumbnailUrl, asset.type || 'image');
+    return asset;
+  },
+
+  delete: (id) => {
+    const stmt = db.prepare('DELETE FROM assets WHERE id = ?');
+    stmt.run(id);
+  },
+
+  getById: (id) => {
+    return db.prepare('SELECT * FROM assets WHERE id = ?').get(id);
   }
 };
 

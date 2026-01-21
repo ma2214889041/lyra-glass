@@ -7,10 +7,12 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.971.0",
     "@google/genai": "^1.33.0",
     "better-sqlite3": "^11.7.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "sharp": "^0.34.5"
   }
 }

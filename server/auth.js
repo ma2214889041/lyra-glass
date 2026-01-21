@@ -95,6 +95,7 @@ export const adminLogin = (username, password) => {
   }
 
   const token = generateToken();
+  // 管理员的 user_id 为 null（不关联到 users 表）
   const session = sessionDb.create(token, username, 24, null, 'admin'); // 24小时有效
   return {
     token: session.token,

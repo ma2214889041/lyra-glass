@@ -74,16 +74,24 @@ export interface TemplateItem {
   imageUrl: string;
   name: string;
   description: string;
-  prompt: string;                    // 核心提示词，可包含 {{variable}} 占位符
+  prompt: string;                    // 核心提示词，可包含 {{variable}} 占位符（兼容旧版）
+  malePrompt?: string;               // 男性版本提示词
+  femalePrompt?: string;             // 女性版本提示词
   tags: string[];                    // 标签ID数组（支持多标签）
   variables: TemplateVariable[];     // 用户可填入的变量
+  // 模板默认设置
+  defaultGender?: 'male' | 'female';           // 默认性别
 }
 
 export interface GeneratedImage {
   id: string;
   url: string;
+  thumbnailUrl?: string;
   type: string;
   timestamp: number;
+  prompt?: string;
+  isPublic?: boolean;
+  username?: string; // 用于社区画廊显示作者
 }
 
 export interface PosterConfig {

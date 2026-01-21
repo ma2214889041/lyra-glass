@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { taskDb, imageDb, promptHistoryDb } from './db.js';
 import { generateFromTemplate } from './gemini.js';
+import { saveImage } from './storage.js';
 
 // 任务处理器配置
 const POLL_INTERVAL = 3000; // 轮询间隔（毫秒）
@@ -17,33 +18,43 @@ const processTask = async (task) => {
 
     if (task.type === 'generate') {
       // 图片生成任务
-      const { imageBase64, prompt, aspectRatio, templateId, templateName, variableValues, modelConfig, imageQuality } = task.inputData;
+      const { imageBase64, prompt, aspectRatio, templateId, templateName, variableValues, modelConfig, imageQuality, gender } = task.inputData;
 
+      console.log(`[TaskProcessor] 开始处理任务 ${task.id}, userId: ${task.userId}, type: ${task.type}`);
       taskDb.updateProgress(task.id, 30);
 
       // 调用生成函数
-      let imageUrl;
+      let imageData;
       if (templateId === 'custom' && modelConfig) {
         // 自定义配置生成
-        // 需要导入 generateEyewearImage
+        console.log(`[TaskProcessor] 使用自定义配置生成, gender: ${gender}`);
         const { generateEyewearImage } = await import('./gemini.js');
-        imageUrl = await generateEyewearImage(imageBase64, modelConfig, imageQuality || '1K');
+        imageData = await generateEyewearImage(imageBase64, imageQuality || '1K', modelConfig, gender || 'female');
       } else {
         // 模板生成
-        imageUrl = await generateFromTemplate(imageBase64, prompt, aspectRatio || '3:4');
+        console.log(`[TaskProcessor] 使用模板生成: ${templateId}`);
+        imageData = await generateFromTemplate(imageBase64, prompt, aspectRatio || '3:4');
       }
 
+      console.log(`[TaskProcessor] 图片生成成功，开始保存...`);
       taskDb.updateProgress(task.id, 80);
 
-      // 保存到 generated_images
+      // 保存图片到存储（本地或R2）
       const imageId = crypto.randomUUID();
-      imageDb.save({
+      console.log(`[TaskProcessor] 保存图片，imageId: ${imageId}, userId: ${task.userId}`);
+      const { url, thumbnailUrl } = await saveImage(imageData, task.userId, imageId);
+
+      // 保存到 generated_images
+      await imageDb.save({
         id: imageId,
-        url: imageUrl,
+        url,
+        thumbnailUrl,
         type: 'template',
         config: { templateId, templateName, variableValues, modelConfig, async: true },
         prompt: prompt || (modelConfig ? JSON.stringify(modelConfig) : 'Custom Generation')
       }, task.userId);
+
+      console.log(`[TaskProcessor] 图片已保存到数据库`);
 
       // 保存提示词历史
       if (task.userId) {
@@ -51,7 +62,7 @@ const processTask = async (task) => {
       }
 
       // 完成任务
-      taskDb.complete(task.id, { imageId, imageUrl });
+      taskDb.complete(task.id, { imageId, imageUrl: url, thumbnailUrl });
       console.log(`[TaskProcessor] Task ${task.id} completed successfully`);
 
     } else if (task.type === 'batch') {
@@ -73,19 +84,23 @@ const processTask = async (task) => {
           }
 
           // 生成图片
-          const imageUrl = await generateFromTemplate(imageBase64, prompt, aspectRatio || '3:4');
+          const imageData = await generateFromTemplate(imageBase64, prompt, aspectRatio || '3:4');
+
+          // 保存图片到存储（本地或R2）
+          const imageId = crypto.randomUUID();
+          const { url, thumbnailUrl } = await saveImage(imageData, task.userId, imageId);
 
           // 保存到 generated_images
-          const imageId = crypto.randomUUID();
-          imageDb.save({
+          await imageDb.save({
             id: imageId,
-            url: imageUrl,
+            url,
+            thumbnailUrl,
             type: 'batch',
             config: { templateId, templateName, combination: combo, batchIndex: i },
             prompt
           }, task.userId);
 
-          results.push({ imageId, imageUrl, combination: combo, success: true });
+          results.push({ imageId, imageUrl: url, thumbnailUrl, combination: combo, success: true });
 
           // 保存提示词历史
           if (task.userId) {
