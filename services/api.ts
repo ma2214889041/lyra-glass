@@ -1,6 +1,9 @@
 import { ModelConfig, PosterConfig, TemplateItem, ImageSize, AspectRatio, AppMode, User, GeneratedImage, Tag, PromptHistoryItem, FavoriteTemplate } from '../types';
 
-const API_BASE = '/api';
+// 支持环境变量配置 API 地址
+// 开发环境：使用 vite proxy 代理到本地服务器
+// 生产环境：使用 Cloudflare Workers URL
+const API_BASE = (import.meta.env.VITE_API_URL || '') + '/api';
 
 // Token 管理
 const getToken = (): string | null => localStorage.getItem('lyra_auth_token');

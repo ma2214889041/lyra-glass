@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 
-const ATMOSPHERE_ENHANCEMENT = {
+const ATMOSPHERE_ENHANCEMENT: Record<string, string> = {
   'High-Fashion Edge': "Editorial avant-garde styling, high-contrast shadows, sharp silhouettes, urban brutalist background. Cold color temperature.",
   'Natural & Friendly': "Warm morning sunlight, soft linen clothing, candid posture, cozy garden or sunlit library setting. Dappled light shadows.",
   'Professional Executive': "Clean office architecture, glass reflections, sharp corporate attire, cool-toned professional lighting with luxury textures.",
@@ -54,8 +54,7 @@ const DEVELOPER_PROMPT = `
 - Commercial photography quality with professional lighting
 `;
 
-
-const LIGHTING_INTENT_MAPPING = {
+const LIGHTING_INTENT_MAPPING: Record<string, string> = {
   'Butterfly (Paramount)': 'Top-front key light for symmetrical horizontal rim highlights.',
   'Rembrandt': '45-degree directional light for 3D volume and triangular eye-light.',
   'Rim Light': 'Strong backlighting to create a luminous halo separating edges from background.',
@@ -64,7 +63,7 @@ const LIGHTING_INTENT_MAPPING = {
   'Golden Hour': 'Warm low-angle natural light (5600K) for honey-toned highlights.'
 };
 
-const GENDER_MODEL_SPECS = {
+const GENDER_MODEL_SPECS: Record<string, { model: string; features: string; styling: string; pose: string }> = {
   male: {
     model: 'East Asian male model, age 25-35',
     features: 'Strong jawline, natural grooming, confident expression',
@@ -79,42 +78,46 @@ const GENDER_MODEL_SPECS = {
   }
 };
 
-const getAI = async () => {
-  const apiKey = process.env.GEMINI_API_KEY;
+/**
+ * 获取 Gemini AI 实例
+ */
+function getAI(apiKey: string): GoogleGenAI {
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY 未配置');
   }
+  return new GoogleGenAI({ apiKey });
+}
 
-  const config = { apiKey };
+interface ModelConfig {
+  framing: string;
+  scene: string;
+  visualPurpose: string;
+  camera: string;
+  lens: string;
+  lighting: string;
+  mood: string;
+  skinTexture: string;
+  aspectRatio: string;
+  modelVibe: string;
+}
 
-  // 如果配置了代理（用于中国大陆访问）
-  if (process.env.HTTPS_PROXY || process.env.HTTP_PROXY) {
-    const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
-    console.log(`🌐 使用代理访问 Gemini API: ${proxyUrl}`);
-
-    try {
-      // 动态导入代理模块（避免强制依赖）
-      const { HttpsProxyAgent } = await import('https-proxy-agent');
-      const agent = new HttpsProxyAgent(proxyUrl);
-      config.httpAgent = agent;
-      config.httpsAgent = agent;
-    } catch (error) {
-      console.warn('⚠️ 代理模块未安装，请运行: npm install https-proxy-agent');
-      console.warn('⚠️ 将直接连接 Gemini API（中国大陆可能无法访问）');
-    }
-  }
-
-  return new GoogleGenAI(config);
-};
-
-export const generateEyewearImage = async (imageBase64, size, modelConfig, gender = 'female') => {
-  const ai = await getAI();
+/**
+ * 生成眼镜模特图
+ */
+export async function generateEyewearImage(
+  apiKey: string,
+  imageBase64: string,
+  size: string,
+  modelConfig: ModelConfig,
+  gender: string = 'female'
+): Promise<string> {
+  const ai = getAI(apiKey);
   const model = 'gemini-3-pro-image-preview';
 
   const atmosphericContext = ATMOSPHERE_ENHANCEMENT[modelConfig.modelVibe] || "";
   const genderSpec = GENDER_MODEL_SPECS[gender] || GENDER_MODEL_SPECS.female;
 
-  let postureInstruction = modelConfig.framing === 'Full Body' || modelConfig.framing === 'Upper Body'
+  const postureInstruction = modelConfig.framing === 'Full Body' || modelConfig.framing === 'Upper Body'
     ? `${genderSpec.pose}. Editorial interaction with environment that emphasizes the eyewear's profile.`
     : `${genderSpec.pose}. Natural head tilt, direct eye contact through lenses, hair styled behind ears to show temples.`;
 
@@ -166,10 +169,19 @@ export const generateEyewearImage = async (imageBase64, size, modelConfig, gende
     }
   }
   throw new Error("RENDER_FAILED");
-};
+}
 
-export const generatePosterImage = async (imageBase64, config, size, aspectRatio = '3:4') => {
-  const ai = await getAI();
+/**
+ * 生成海报图
+ */
+export async function generatePosterImage(
+  apiKey: string,
+  imageBase64: string,
+  config: { title: string; layout: string; material: string },
+  size: string,
+  aspectRatio: string = '3:4'
+): Promise<string> {
+  const ai = getAI(apiKey);
   const model = 'gemini-3-pro-image-preview';
 
   const response = await ai.models.generateContent({
@@ -194,12 +206,19 @@ export const generatePosterImage = async (imageBase64, config, size, aspectRatio
     }
   }
   throw new Error("POSTER_FAILED");
-};
+}
 
-export const getPromptSuggestions = async (mode, imageBase64) => {
-  const ai = await getAI();
+/**
+ * 获取提示建议
+ */
+export async function getPromptSuggestions(
+  apiKey: string,
+  mode: string,
+  imageBase64?: string
+): Promise<string[]> {
+  const ai = getAI(apiKey);
 
-  const parts = [];
+  const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
   if (imageBase64) {
     parts.push({
       inlineData: {
@@ -223,23 +242,34 @@ export const getPromptSuggestions = async (mode, imageBase64) => {
     });
 
     const text = response.text;
-    if (!text) return [];
+    if (!text) return getDefaultSuggestions();
     return JSON.parse(text);
   } catch (error) {
     console.error("Prompt suggestion error:", error);
-    return [
-      "极简主义水泥工作室，配合硬朗冷色调光影。",
-      "自然午后暖阳，透过绿植形成的斑驳光影。",
-      "都市霓虹夜景，带有电影感的蓝橘色调对比。",
-      "高端行政走廊，通透大面积玻璃墙与城市远景。",
-      "法式复古图书馆，柔和的书卷气与自然漫反射光。"
-    ];
+    return getDefaultSuggestions();
   }
-};
+}
 
-// 使用模板提示词生成图片
-export const generateFromTemplate = async (eyewearImageBase64, templatePrompt, aspectRatio = '3:4') => {
-  const ai = await getAI();
+function getDefaultSuggestions(): string[] {
+  return [
+    "极简主义水泥工作室，配合硬朗冷色调光影。",
+    "自然午后暖阳，透过绿植形成的斑驳光影。",
+    "都市霓虹夜景，带有电影感的蓝橘色调对比。",
+    "高端行政走廊，通透大面积玻璃墙与城市远景。",
+    "法式复古图书馆，柔和的书卷气与自然漫反射光。"
+  ];
+}
+
+/**
+ * 使用模板提示词生成图片
+ */
+export async function generateFromTemplate(
+  apiKey: string,
+  eyewearImageBase64: string,
+  templatePrompt: string,
+  aspectRatio: string = '3:4'
+): Promise<string> {
+  const ai = getAI(apiKey);
   const model = 'gemini-3-pro-image-preview';
 
   const fullPrompt = `
@@ -271,7 +301,6 @@ ${templatePrompt}
 - Sharp focus on the eyewear product
 `;
 
-
   const response = await ai.models.generateContent({
     model: model,
     contents: {
@@ -293,27 +322,36 @@ ${templatePrompt}
       if (part.inlineData) {
         const base64Data = part.inlineData.data;
 
-        // 验证数据
         if (!base64Data || base64Data.length < 100) {
-          console.error('❌ Gemini 返回的图片数据太小或为空');
-          console.error('数据长度:', base64Data?.length || 0);
+          console.error('[Gemini] Image data too small or empty');
           throw new Error("INVALID_IMAGE_DATA_TOO_SMALL");
         }
 
-        console.log(`✅ Gemini 返回图片数据大小: ${(base64Data.length / 1024).toFixed(2)} KB`);
+        console.log(`[Gemini] Generated image size: ${(base64Data.length / 1024).toFixed(2)} KB`);
         return `data:image/png;base64,${base64Data}`;
       }
     }
   }
 
-  console.error('❌ Gemini 响应中没有图片数据');
-  console.error('Response:', JSON.stringify(response, null, 2).substring(0, 500));
+  console.error('[Gemini] No image data in response');
   throw new Error("TEMPLATE_RENDER_FAILED");
-};
+}
 
-// 使用 Gemini Flash 优化提示词（管理员专用）- 同时生成男女两个版本 + 名称描述
-export const optimizePrompt = async (rawPrompt) => {
-  const ai = await getAI();
+/**
+ * 优化提示词（管理员专用）
+ */
+export async function optimizePrompt(
+  apiKey: string,
+  rawPrompt: string
+): Promise<{
+  name: string;
+  description: string;
+  defaultGender: string;
+  defaultFraming: string;
+  female: string;
+  male: string | null;
+}> {
+  const ai = getAI(apiKey);
   const model = 'gemini-3-flash-preview';
 
   const systemPrompt = `You are a prompt adapter for eyewear photography. Your task is to make MINIMAL changes to the user's prompt.
@@ -323,62 +361,27 @@ export const optimizePrompt = async (rawPrompt) => {
 1. TREAT INPUT AS RAW STRING - DO NOT CHANGE FORMAT
    - Treat the ENTIRE input as a raw string, whether it's JSON, plain text, or any other format
    - DO NOT parse, restructure, or reformat the input
-   - DO NOT extract fields or flatten JSON - keep the EXACT original format
    - Only INSERT or REPLACE specific text content within the original string
-   - Keep ALL original formatting, structure, quotes, brackets, parameters EXACTLY as-is
-   - Keep ALL scene descriptions, lighting, composition, camera settings unchanged
-   - Keep ALL mood, atmosphere, color grading unchanged
-   - DO NOT add new details the user didn't specify
-   - DO NOT rewrite or "improve" the prompt beyond the required insertions
 
 2. EYEWEAR FIDELITY (CRITICAL - ALWAYS REQUIRED)
-   - REGARDLESS of whether the original prompt mentions eyewear or not, you MUST add eyewear instruction
-   - ALWAYS include this statement: "Model wearing the eyewear/sunglasses from the reference image with 100% fidelity - exact frame shape, color, material, and lens tint must be reproduced exactly as shown in the reference"
-   - If original prompt mentions glasses/sunglasses/眼镜/墨镜: replace that mention with the above fidelity statement
-   - If original prompt does NOT mention any eyewear: add the above fidelity statement at the beginning
-   - This is NON-NEGOTIABLE - every generated prompt MUST include eyewear reproduction instruction
+   - ALWAYS include this statement: "Model wearing the eyewear/sunglasses from the reference image with 100% fidelity"
 
-3. SKIN QUALITY (ALWAYS INCLUDE - KEEP IT SHORT)
-   - ALWAYS add skin quality instruction to every prompt
+3. SKIN QUALITY (ALWAYS INCLUDE)
    - Required statement: "Realistic healthy skin with natural texture and visible pores, authentic and lifelike, NOT artificial or plastic or ceramic"
-   - Keep it SHORT - only use 3 core negative terms: artificial, plastic, ceramic
-   - DO NOT list many negative terms - it makes the prompt too long and redundant
 
-4. CLOTHING MODESTY (ONLY FOR OVERLY REVEALING CLOTHES)
-   - ONLY modify clothing if it is overly revealing/exposed
-     * Revealing bikini → stylish swimwear with cover-up
-     * Low-cut/deep neckline → elegant neckline
-     * Very short skirts → appropriate length
-   - DO NOT change poses or body language - keep the original sexy/seductive poses if present
-   - DO NOT change expressions - keep sultry, seductive, alluring expressions as-is
-   - Keep the original mood and sensuality, only cover up exposed skin/clothing
-
-5. GENDER ADAPTATION - SMART CLOTHING MATCHING
+4. GENDER ADAPTATION
    - Create TWO versions: female and male
-   - For male version: DO NOT default to suits/formal wear
-     * Instead, ANALYZE the female version's atmosphere and scene
-     * Choose male clothing that matches the SAME VIBE and SCENE appropriately
-     * Examples:
-       - Beach/casual → linen shirt, shorts, sandals (not suit)
-       - Sporty/athletic → athletic wear, sneakers (not suit)
-       - Artistic/creative → relaxed blazer, turtleneck, creative styling (not formal suit)
-       - Luxury/elegant → well-tailored casual luxury, designer pieces
-       - Street/urban → streetwear, trendy casual (not suit)
-       - Professional/office → then suit is appropriate
-     * Match the footwear to the scene (sandals, sneakers, loafers, etc. - not always dress shoes)
-   - For female version: maintain original styling direction
-   - Keep the SAME energy, mood, and scene concept between genders
+   - Match the SAME VIBE and SCENE appropriately
 
-6. USE PLACEHOLDERS FOR USER SELECTION
-   - Use {{ethnicity}} for model ethnicity (user will select: East Asian, Caucasian, etc.)
-   - Use {{age}} for age group (user will select: Youth, Adult, Mature, etc.)
-   - Example: "{{ethnicity}} {{age}} female model..."
+5. USE PLACEHOLDERS
+   - Use {{ethnicity}} for model ethnicity
+   - Use {{age}} for age group
 
-7. GENERATE TEMPLATE METADATA
-   - name: Short Chinese name (2-6 chars) like "都市精英", "海滩假日"
+6. GENERATE METADATA
+   - name: Short Chinese name (2-6 chars)
    - description: Chinese description (10-30 chars)
-   - defaultGender: 'male' or 'female' based on original prompt's vibe
-   - defaultFraming: 'Close-up', 'Upper Body', or 'Full Body' based on prompt
+   - defaultGender: 'male' or 'female'
+   - defaultFraming: 'Close-up', 'Upper Body', or 'Full Body'
 
 [OUTPUT FORMAT]
 Return ONLY valid JSON:
@@ -387,79 +390,21 @@ Return ONLY valid JSON:
   "description": "模板描述",
   "defaultGender": "female",
   "defaultFraming": "Close-up",
-  "female": "MINIMALLY modified prompt for female...",
-  "male": "MINIMALLY modified prompt for male..."
-}
-
-[EXAMPLE 1 - Professional Scene]
-Input: "Professional woman in elegant black dress, soft office lighting, confident pose"
-
-Output:
-{
-  "name": "职场精英",
-  "description": "专业自信的职场形象照",
-  "defaultGender": "female",
-  "defaultFraming": "Upper Body",
-  "female": "{{ethnicity}} {{age}} female model wearing the reference eyewear with 100% fidelity. Professional woman in elegant black dress, soft office lighting, confident pose",
-  "male": "{{ethnicity}} {{age}} male model wearing the reference eyewear with 100% fidelity. Professional man in tailored dark suit, soft office lighting, confident pose"
-}
-
-[EXAMPLE 2 - Casual Beach Scene]
-Input: "Stylish woman in flowing summer dress, golden hour beach, relaxed vacation mood"
-
-Output:
-{
-  "name": "海滩假日",
-  "description": "轻松惬意的度假风格",
-  "defaultGender": "female",
-  "defaultFraming": "Full Body",
-  "female": "{{ethnicity}} {{age}} female model wearing the reference sunglasses with 100% fidelity. Stylish woman in flowing summer dress, golden hour beach, relaxed vacation mood",
-  "male": "{{ethnicity}} {{age}} male model wearing the reference sunglasses with 100% fidelity. Stylish man in linen shirt and light shorts, leather sandals, golden hour beach, relaxed vacation mood"
-}
-
-[EXAMPLE 3 - Clothing Modesty Only - Keep Poses]
-Input: "Seductive woman in revealing bikini, provocative pose, bedroom eyes"
-
-Output:
-{
-  "name": "夏日风情",
-  "description": "性感夏日泳装风格",
-  "defaultGender": "female",
-  "defaultFraming": "Upper Body",
-  "female": "{{ethnicity}} {{age}} female model wearing the reference sunglasses with 100% fidelity. Seductive woman in stylish swimwear with cover-up, provocative pose, bedroom eyes. Realistic healthy skin with natural texture, authentic and lifelike, NOT artificial or plastic or ceramic.",
-  "male": "{{ethnicity}} {{age}} male model wearing the reference sunglasses with 100% fidelity. Attractive man in stylish swim shorts, provocative pose, smoldering eyes. Realistic healthy skin with natural texture, authentic and lifelike, NOT artificial or plastic or ceramic."
-}
-
-[EXAMPLE 4 - JSON Input - KEEP EXACT FORMAT, ONLY MODIFY TEXT INSIDE]
-Input: {"description":"Ultra-photorealistic glamour portrait of woman in black gown, seductive pose, low neckline","parameters":{"aspect_ratio":"9:16","steps":50,"cfg_scale":9.5,"style":"Photorealistic"}}
-
-Output:
-{
-  "name": "黑裙优雅",
-  "description": "高端时尚黑裙人像",
-  "defaultGender": "female",
-  "defaultFraming": "Full Body",
-  "female": "{\"description\":\"{{ethnicity}} {{age}} female model wearing the eyewear/sunglasses from the reference image with 100% fidelity. Ultra-photorealistic glamour portrait of woman in elegant black gown, sophisticated pose. Realistic healthy skin with natural texture, authentic and lifelike, NOT artificial or plastic or ceramic.\",\"parameters\":{\"aspect_ratio\":\"9:16\",\"steps\":50,\"cfg_scale\":9.5,\"style\":\"Photorealistic\"}}",
-  "male": "{\"description\":\"{{ethnicity}} {{age}} male model wearing the eyewear/sunglasses from the reference image with 100% fidelity. Ultra-photorealistic glamour portrait of man in tailored black suit, sophisticated pose. Realistic healthy skin with natural texture, authentic and lifelike, NOT artificial or plastic or ceramic.\",\"parameters\":{\"aspect_ratio\":\"9:16\",\"steps\":50,\"cfg_scale\":9.5,\"style\":\"Photorealistic\"}}"
-}
-
-Notice:
-- JSON input → OUTPUT KEEPS THE SAME JSON STRUCTURE (as escaped string)
-- All parameters preserved exactly: aspect_ratio, steps, cfg_scale, style
-- Only the description TEXT is modified (add eyewear, skin, de-sexualize, gender adapt)
-- female/male are strings containing the full JSON (with escaped quotes)`;
+  "female": "prompt for female...",
+  "male": "prompt for male..."
+}`;
 
   const response = await ai.models.generateContent({
     model: model,
     contents: {
       parts: [
-        { text: `ADAPT this prompt with MINIMAL changes (preserve 95% of original). Only modify for gender and add eyewear integration if missing:\n\n${rawPrompt}` }
+        { text: `ADAPT this prompt with MINIMAL changes:\n\n${rawPrompt}` }
       ]
     },
     config: {
       systemInstruction: systemPrompt,
       responseMimeType: "application/json",
-      temperature: 0.2  // Lower temperature for more consistent, minimal changes
+      temperature: 0.2
     }
   });
 
@@ -467,9 +412,16 @@ Notice:
     const text = response.candidates[0].content.parts[0].text.trim();
     try {
       return JSON.parse(text);
-    } catch (e) {
-      return { female: text, male: null, defaultGender: 'female', defaultFraming: 'Close-up' };
+    } catch {
+      return {
+        name: '自定义模板',
+        description: '用户自定义模板',
+        defaultGender: 'female',
+        defaultFraming: 'Close-up',
+        female: text,
+        male: null
+      };
     }
   }
   throw new Error("PROMPT_OPTIMIZATION_FAILED");
-};
+}

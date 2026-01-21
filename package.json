@@ -1,15 +1,12 @@
 {
-  "name": "lyra-眼镜摄影工坊",
+  "name": "lyra-eyewear-workshop",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:server": "cd server && npm run dev",
-    "dev:all": "npm run dev:server & npm run dev",
     "build": "vite build",
-    "preview": "vite preview",
-    "server:install": "cd server && npm install"
+    "preview": "vite preview"
   },
   "dependencies": {
     "react": "^19.2.3",
