@@ -1,4 +1,4 @@
-import type { R2Bucket } from '@cloudflare/workers-types';
+import type { R2Bucket, R2ListOptions, R2Object, D1Database } from '@cloudflare/workers-types';
 
 /**
  * 保存图片到 R2
@@ -183,8 +183,74 @@ export async function cleanupOldImages(
     }
 
     return deletedCount;
+    // ... (cleanupOldImages implementation)
+    return deletedCount;
   } catch (error) {
     console.error('[Cleanup] Failed:', error);
     return 0;
+  }
+}
+
+/**
+ * 清理孤儿资源 (assets/ 下的文件，但不在 templates 表中)
+ * @param r2 R2 Bucket 绑定
+ * @param db D1 数据库
+ */
+export async function cleanupOrphanedAssets(
+  r2: R2Bucket,
+  db: D1Database
+): Promise<{ deleted: number; scanned: number; errors: number }> {
+  console.log('[Cleanup] Starting orphaned assets cleanup...');
+
+  try {
+    // 1. 获取所有模板图片 URL
+    const { results } = await db.prepare('SELECT imageUrl FROM templates WHERE imageUrl IS NOT NULL').all();
+    const activeUrls = new Set(results.map((r: any) => r.imageUrl));
+    console.log(`[Cleanup] Found ${activeUrls.size} active template images.`);
+
+    // 2. 列出 R2 assets/ 下的所有文件
+    // 注意：如果 assets 数量非常大，可能需要分批处理或限制单次运行时间
+    let listOptions: R2ListOptions = { prefix: 'assets/' };
+    let listed = await r2.list(listOptions);
+
+    let scanned = 0;
+    let deleted = 0;
+    let errors = 0;
+
+    const processObjects = async (objects: R2Object[]) => {
+      for (const obj of objects) {
+        scanned++;
+        const key = obj.key;
+        // 构造对应的 URL (假设所有 template imageUrl 都是 /r2/xxx 格式)
+        const url = `/r2/${key}`;
+
+        // 检查是否在使用的 URL 集合中
+        // 注意：这里需要精确匹配。如果 DB 中存的是完整 URL (http...)，这里需要相应调整
+        if (!activeUrls.has(url)) {
+          console.log(`[Cleanup] Deleting orphan: ${key}`);
+          try {
+            await r2.delete(key);
+            deleted++;
+          } catch (e) {
+            console.error(`[Cleanup] Failed to delete ${key}`, e);
+            errors++;
+          }
+        }
+      }
+    };
+
+    await processObjects(listed.objects);
+
+    while (listed.truncated) {
+      listOptions.cursor = listed.cursor;
+      listed = await r2.list(listOptions);
+      await processObjects(listed.objects);
+    }
+
+    console.log(`[Cleanup] Finished. Scanned: ${scanned}, Deleted: ${deleted}, Errors: ${errors}`);
+    return { deleted, scanned, errors };
+  } catch (error) {
+    console.error('[Cleanup] Orphan cleanup failed:', error);
+    throw error;
   }
 }

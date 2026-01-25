@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import type { Template, Tag, GeneratedImage, Task, Asset, Session } from './types';
+import type { Template, Tag, GeneratedImage, Task, Asset, Session, BatchProgress } from './types';
 
 // ========== 标签操作 ==========
 export const tagDb = {
@@ -33,14 +33,25 @@ export const tagDb = {
 
 // ========== 模板操作 ==========
 export const templateDb = {
-  getAll: async (db: D1Database, tagFilter?: string): Promise<Template[]> => {
-    const { results } = await db.prepare('SELECT * FROM templates ORDER BY created_at DESC').all();
+  getAll: async (db: D1Database, options?: { tagFilter?: string; page?: number; limit?: number }): Promise<{ data: Template[]; total: number; page: number; limit: number }> => {
+    const page = options?.page || 1;
+    const limit = options?.limit || 12;
+    const offset = (page - 1) * limit;
+
+    // 获取总数
+    const countResult = await db.prepare('SELECT COUNT(*) as count FROM templates').first<{ count: number }>();
+    const total = countResult?.count || 0;
+
+    // 获取分页数据
+    const { results } = await db.prepare('SELECT * FROM templates ORDER BY created_at DESC, id ASC LIMIT ? OFFSET ?')
+      .bind(limit, offset).all();
 
     let templates = results.map((row: any) => ({
       id: row.id,
       name: row.name,
       description: row.description,
       imageUrl: row.image_url,
+      thumbnailUrl: row.thumbnail_url || null,
       prompt: row.prompt || '',
       malePrompt: row.male_prompt || null,
       femalePrompt: row.female_prompt || null,
@@ -50,10 +61,11 @@ export const templateDb = {
       variables: JSON.parse(row.variables || '[]')
     })) as Template[];
 
-    if (tagFilter) {
-      templates = templates.filter(tpl => tpl.tags.includes(tagFilter));
+    if (options?.tagFilter) {
+      templates = templates.filter(tpl => tpl.tags.includes(options.tagFilter!));
     }
-    return templates;
+
+    return { data: templates, total, page, limit };
   },
 
   getById: async (db: D1Database, id: string): Promise<Template | null> => {
@@ -510,23 +522,25 @@ export const taskDb = {
     taskId: string,
     userId: number,
     type: string,
-    inputData: Record<string, unknown>
+    inputData: Record<string, unknown>,
+    batchId?: string
   ): Promise<Task> => {
     const now = Math.floor(Date.now() / 1000);
     await db.prepare(`
-      INSERT INTO tasks (id, user_id, type, input_data, status, progress, created_at)
-      VALUES (?, ?, ?, ?, 'pending', 0, ?)
-    `).bind(taskId, userId, type, JSON.stringify(inputData), now).run();
+      INSERT INTO tasks (id, user_id, type, input_data, status, progress, batch_id, created_at)
+      VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
+    `).bind(taskId, userId, type, JSON.stringify(inputData), batchId || null, now).run();
 
     return {
       id: taskId,
       userId,
-      type: type as 'generate' | 'batch',
+      type: type as 'generate' | 'batch' | 'product_shot',
       status: 'pending',
       progress: 0,
       inputData,
       outputData: null,
       errorMessage: null,
+      batchId: batchId || null,
       createdAt: now * 1000,
       startedAt: null,
       completedAt: null
@@ -587,12 +601,13 @@ export const taskDb = {
     return {
       id: row.id as string,
       userId: row.user_id as number,
-      type: row.type as 'generate' | 'batch',
+      type: row.type as 'generate' | 'batch' | 'product_shot',
       status: row.status as Task['status'],
       progress: row.progress as number,
       inputData: JSON.parse(row.input_data as string),
       outputData: row.output_data ? JSON.parse(row.output_data as string) : null,
       errorMessage: row.error_message as string | null,
+      batchId: (row.batch_id as string) || null,
       createdAt: (row.created_at as number) * 1000,
       startedAt: row.started_at ? (row.started_at as number) * 1000 : null,
       completedAt: row.completed_at ? (row.completed_at as number) * 1000 : null
@@ -630,9 +645,51 @@ export const taskDb = {
       status: row.status,
       progress: row.progress,
       inputData: JSON.parse(row.input_data),
+      batchId: row.batch_id || null,
       createdAt: row.created_at * 1000,
       startedAt: row.started_at ? row.started_at * 1000 : null
     }));
+  },
+
+  getByBatchId: async (db: D1Database, batchId: string): Promise<Task[]> => {
+    const { results } = await db.prepare(`
+      SELECT * FROM tasks WHERE batch_id = ? ORDER BY created_at ASC
+    `).bind(batchId).all();
+
+    return results.map((row: any) => ({
+      id: row.id,
+      userId: row.user_id,
+      type: row.type as 'generate' | 'batch' | 'product_shot',
+      status: row.status as Task['status'],
+      progress: row.progress,
+      inputData: JSON.parse(row.input_data),
+      outputData: row.output_data ? JSON.parse(row.output_data) : null,
+      errorMessage: row.error_message,
+      batchId: row.batch_id,
+      createdAt: row.created_at * 1000,
+      startedAt: row.started_at ? row.started_at * 1000 : null,
+      completedAt: row.completed_at ? row.completed_at * 1000 : null
+    }));
+  },
+
+  getBatchProgress: async (db: D1Database, batchId: string): Promise<BatchProgress> => {
+    const row = await db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending
+      FROM tasks WHERE batch_id = ?
+    `).bind(batchId).first();
+
+    return {
+      total: (row?.total as number) || 0,
+      completed: (row?.completed as number) || 0,
+      failed: (row?.failed as number) || 0,
+      processing: (row?.processing as number) || 0,
+      pending: (row?.pending as number) || 0
+    };
   },
 
   getQueueStats: async (db: D1Database) => {
@@ -668,5 +725,58 @@ export const taskDb = {
       WHERE status = 'processing' AND started_at < ?
     `).bind(cutoff).run();
     return result.meta.changes;
+  },
+
+  // 取消任务（只能取消 pending 状态的任务）
+  cancel: async (db: D1Database, taskId: string, userId: number): Promise<{ success: boolean; message: string }> => {
+    // 先检查任务是否存在且属于该用户
+    const task = await db.prepare(`
+      SELECT id, status, user_id FROM tasks WHERE id = ?
+    `).bind(taskId).first();
+
+    if (!task) {
+      return { success: false, message: '任务不存在' };
+    }
+
+    if (task.user_id !== userId) {
+      return { success: false, message: '无权取消此任务' };
+    }
+
+    if (task.status === 'completed') {
+      return { success: false, message: '任务已完成，无法取消' };
+    }
+
+    if (task.status === 'failed') {
+      return { success: false, message: '任务已失败' };
+    }
+
+    // 取消任务（标记为 cancelled 状态）
+    const now = Math.floor(Date.now() / 1000);
+    await db.prepare(`
+      UPDATE tasks SET status = 'cancelled', completed_at = ? WHERE id = ?
+    `).bind(now, taskId).run();
+
+    return { success: true, message: '任务已取消' };
+  },
+
+  // 获取用户的已完成任务
+  getCompletedTasks: async (db: D1Database, userId: number, limit: number = 50) => {
+    const { results } = await db.prepare(`
+      SELECT * FROM tasks WHERE user_id = ? AND status = 'completed' ORDER BY completed_at DESC LIMIT ?
+    `).bind(userId, limit).all();
+
+    return results.map((row: any) => ({
+      id: row.id,
+      type: row.type,
+      status: row.status,
+      progress: row.progress,
+      inputData: JSON.parse(row.input_data),
+      outputData: row.output_data ? JSON.parse(row.output_data) : null,
+      errorMessage: row.error_message,
+      batchId: row.batch_id || null,
+      createdAt: row.created_at * 1000,
+      startedAt: row.started_at ? row.started_at * 1000 : null,
+      completedAt: row.completed_at ? row.completed_at * 1000 : null
+    }));
   }
 };

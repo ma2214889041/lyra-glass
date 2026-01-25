@@ -1,9 +1,22 @@
-import { ModelConfig, PosterConfig, TemplateItem, ImageSize, AspectRatio, AppMode, User, GeneratedImage, Tag, PromptHistoryItem, FavoriteTemplate } from '../types';
+import { ModelConfig, PosterConfig, TemplateItem, ImageSize, AspectRatio, AppMode, User, GeneratedImage, Tag, PromptHistoryItem, FavoriteTemplate, ProductShotConfig, ProductAngle, ProductShotResult, ProductShotBatchResponse, ProductShotBatchStatus } from '../types';
 
 // 支持环境变量配置 API 地址
 // 开发环境：使用 vite proxy 代理到本地服务器
 // 生产环境：使用 Cloudflare Workers URL
-const API_BASE = (import.meta.env.VITE_API_URL || '') + '/api';
+// 简化逻辑：直接判断是否为开发环境
+const isDev = import.meta.env.DEV;
+const API_DOMAIN = isDev ? (import.meta.env.VITE_API_URL || 'http://localhost:8787') : 'https://api.glass.lyrai.eu';
+const API_BASE = API_DOMAIN + '/api';
+
+console.log('[Lyra Config] API Target:', API_BASE);
+
+
+export const resolveImageUrl = (path: string | undefined | null): string => {
+  if (!path) return '';
+  if (path.startsWith('http') || path.startsWith('data:')) return path;
+  if (path.startsWith('/r2/')) return API_DOMAIN + path;
+  return path;
+};
 
 // Token 管理
 const getToken = (): string | null => localStorage.getItem('lyra_auth_token');
@@ -132,9 +145,13 @@ export const tagApi = {
 // ========== 模板 API ==========
 
 export const templateApi = {
-  getAll: async (tag?: string): Promise<TemplateItem[]> => {
-    const query = tag ? `?tag=${tag}` : '';
-    return request<TemplateItem[]>(`/templates${query}`);
+  getAll: async (options?: { tag?: string; page?: number; limit?: number }): Promise<{ data: TemplateItem[]; total: number; page: number; limit: number }> => {
+    const params = new URLSearchParams();
+    if (options?.tag) params.append('tag', options.tag);
+    if (options?.page) params.append('page', options.page.toString());
+    if (options?.limit) params.append('limit', options.limit.toString());
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request<{ data: TemplateItem[]; total: number; page: number; limit: number }>(`/templates${query}`);
   },
 
   getById: async (id: string): Promise<TemplateItem> => {
@@ -221,6 +238,25 @@ export const generateApi = {
     );
     return result.suggestions;
   },
+
+  // AI 优化提示词
+  optimizePrompt: async (prompt: string): Promise<{
+    name: string;
+    description: string;
+    defaultGender: string;
+    defaultFraming: string;
+    female: string;
+    male: string | null;
+  }> => {
+    const result = await request<{ success: boolean; optimizedPrompt: any }>(
+      '/generate/optimize-prompt',
+      {
+        method: 'POST',
+        body: JSON.stringify({ prompt }),
+      }
+    );
+    return result.optimizedPrompt;
+  },
 };
 
 // ========== 用户数据 API ==========
@@ -230,6 +266,13 @@ export const userApi = {
     const query = view ? `?view=${view}` : '';
     const result = await request<{ success: boolean; images: GeneratedImage[] }>(`/user/history${query}`);
     return result.images;
+  },
+
+  deleteImage: async (imageId: string): Promise<boolean> => {
+    const result = await request<{ success: boolean }>(`/user/history/${imageId}`, {
+      method: 'DELETE',
+    });
+    return result.success;
   },
 
   // 获取社区公开作品
@@ -375,8 +418,8 @@ interface TaskResponse {
 
 interface Task {
   id: string;
-  type: 'generate' | 'batch';
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  type: 'generate' | 'batch' | 'product_shot';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   inputData?: any;
   outputData?: any;
@@ -427,7 +470,8 @@ export const taskApi = {
     combinations: Array<Record<string, string>>,
     aspectRatio?: string,
     templateId?: string,
-    templateName?: string
+    templateName?: string,
+    concurrency: number = 3
   ): Promise<TaskResponse> => {
     return request<TaskResponse>('/tasks/batch', {
       method: 'POST',
@@ -437,7 +481,8 @@ export const taskApi = {
         combinations,
         aspectRatio,
         templateId,
-        templateName
+        templateName,
+        concurrency
       })
     });
   },
@@ -453,6 +498,19 @@ export const taskApi = {
     return request(`/tasks${query}`);
   },
 
+  // 获取已完成任务
+  getCompletedTasks: async (): Promise<{ success: boolean; tasks: Task[] }> => {
+    return request('/tasks?completed=true');
+  },
+
+  // 取消任务
+  cancelTask: async (taskId: string): Promise<boolean> => {
+    const result = await request<{ success: boolean }>(`/tasks/${taskId}/cancel`, {
+      method: 'POST'
+    });
+    return result.success;
+  },
+
   // 获取队列统计
   getQueueStats: async (): Promise<{
     success: boolean;
@@ -460,6 +518,32 @@ export const taskApi = {
     processor: { isRunning: boolean; activeWorkers: number; maxWorkers: number };
   }> => {
     return request('/tasks/queue/stats');
+  },
+
+  // 提交产品图生成任务
+  submitProductShot: async (
+    imageBase64: string,
+    angles: ProductAngle[],
+    config: Omit<ProductShotConfig, 'angles'>,
+    concurrency: number = 3
+  ): Promise<ProductShotBatchResponse> => {
+    return request<ProductShotBatchResponse>('/tasks/product-shot', {
+      method: 'POST',
+      body: JSON.stringify({
+        imageBase64,
+        angles,
+        config,
+        concurrency
+      })
+    });
+  },
+
+  // 取消任务 - Duplicate removed
+
+
+  // 获取批次状态
+  getBatchStatus: async (batchId: string): Promise<ProductShotBatchStatus> => {
+    return request<ProductShotBatchStatus>(`/tasks/batch/${batchId}`);
   }
 };
 

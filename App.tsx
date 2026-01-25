@@ -7,7 +7,7 @@ import {
   EthnicityType, LightingType, FramingType, CommercialStyle, ModelVibe,
   CameraType, LensType, SkinTexture, MoodType, StylePreset, TemplateItem, User,
   Tag, TemplateVariable, PREDEFINED_MODEL_VARIABLES, EXTENDED_VARIABLES,
-  PromptHistoryItem, FavoriteTemplate
+  PromptHistoryItem, FavoriteTemplate, UserSettings, ProductShotConfig, ProductAngle, ProductBackground
 } from './types';
 import { authApi, templateApi, generateApi, userApi, tagApi, feedbackApi, batchApi, taskApi } from './services/api';
 import { Button } from './components/Button';
@@ -28,6 +28,45 @@ const convertBlobToBase64 = (blob: Blob): Promise<string> => {
     };
     reader.readAsDataURL(blob);
   });
+};
+
+const API_BASE = 'https://api.glass.lyrai.eu';
+
+const getImageUrl = (url?: string) => {
+  if (!url) return '';
+
+  if (url.startsWith('data:')) return url;
+
+  // 强制替换开发环境/本地 URL (修复数据库中存留的 localhost 地址)
+  if (url.includes('localhost') || url.includes('127.0.0.1')) {
+    const pathIndex = url.indexOf('/r2/');
+    if (pathIndex !== -1) {
+      return `${API_BASE}${url.substring(pathIndex)}`;
+    }
+  }
+
+  // 已经包含完整 API 地址的 URL
+  if (url.startsWith(API_BASE)) return url;
+
+  // 处理 /r2/ 开头的路径
+  if (url.startsWith('/r2/')) {
+    return `${API_BASE}${url}`;
+  }
+
+  // 处理 assets/ 或 generated/ 开头的路径 (不带 /r2/，常见于数据库旧数据)
+  if (url.startsWith('assets/') || url.startsWith('generated/')) {
+    return `${API_BASE}/r2/${url}`;
+  }
+
+  // 对于以 http 开头的其他 URL (外部图片)，直接返回
+  if (url.startsWith('http')) return url;
+
+  // 其他相对路径，尝试加上 API_BASE
+  if (url.startsWith('/')) {
+    return `${API_BASE}${url}`;
+  }
+
+  return url;
 };
 
 const DEFAULT_CONFIG: ModelConfig = {
@@ -69,7 +108,7 @@ const Selector = ({ label, options, current, onChange, labelMap }: any) => (
   <div className="flex flex-col gap-5">
     <label className="text-[10px] text-zinc-600 uppercase tracking-widest font-black">{label}</label>
     <div className="flex flex-wrap gap-3">
-      {options.map((opt: string) => (
+      {options?.map && options.map((opt: string) => (
         <button
           key={opt}
           onClick={() => onChange(opt)}
@@ -99,6 +138,16 @@ const App: React.FC = () => {
   const [templatesLoading, setTemplatesLoading] = useState(true);
 
   const [modelConfig, setModelConfig] = useState<ModelConfig>(DEFAULT_CONFIG);
+
+  // 产品图配置
+  const [productShotConfig, setProductShotConfig] = useState<ProductShotConfig>({
+    angles: ['front'],
+    backgroundColor: 'pure_white',
+    reflectionEnabled: true,
+    shadowStyle: 'soft',
+    outputSize: '2K',
+    aspectRatio: '3:4'
+  });
 
   // 用户认证状态
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -203,6 +252,7 @@ const App: React.FC = () => {
       thumbnailUrl?: string;
     };
   }
+  const [userSettings, setUserSettings] = useState<UserSettings>({ maxConcurrency: 2 });
   const [activeTasks, setActiveTasks] = useState<TaskItem[]>([]);
   const [showTaskQueue, setShowTaskQueue] = useState(false);
   const [taskPollingEnabled, setTaskPollingEnabled] = useState(true);
@@ -329,7 +379,7 @@ const App: React.FC = () => {
     try {
       const favs = await userApi.getFavorites();
       setFavoriteTemplates(favs);
-      setFavorites(new Set(favs.map(f => f.id)));
+      setFavorites(new Set(favs?.map && favs.map(f => f.id)));
     } catch (err) {
       console.error('加载收藏失败:', err);
     }
@@ -846,7 +896,7 @@ const App: React.FC = () => {
           >
             全部
           </button>
-          {allTags.map(tag => (
+          {allTags?.map && allTags.map(tag => (
             <button
               key={tag.id}
               onClick={() => setFilterTag(tag.id)}
@@ -864,7 +914,7 @@ const App: React.FC = () => {
               <p className="text-zinc-600 font-black uppercase tracking-widest text-[10px]">暂无匹配的模板</p>
             </div>
           )}
-          {filteredTemplates.map(tpl => (
+          {filteredTemplates?.map && filteredTemplates.map(tpl => (
             <div
               key={tpl.id}
               onClick={() => {
@@ -883,7 +933,13 @@ const App: React.FC = () => {
               }}
               className="group relative aspect-[3/4] rounded-2xl lg:rounded-[3rem] overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-all duration-700 hover:scale-[1.02] shadow-xl lg:shadow-2xl"
             >
-              <img src={tpl.imageUrl} className="w-full h-full object-cover transition-all duration-500" />
+              <img
+                src={getImageUrl(tpl.imageUrl)}
+                className="w-full h-full object-cover transition-all duration-500"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = 'https://placehold.co/600x800/101010/FFF?text=No+Image';
+                }}
+              />
               <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80 group-hover:opacity-100 transition-opacity"></div>
               {/* 标签显示 */}
               <div className="absolute top-6 left-6 flex flex-wrap gap-2">
@@ -913,7 +969,13 @@ const App: React.FC = () => {
             <div className="bg-zinc-900 rounded-[2rem] max-w-3xl w-full max-h-[95vh] overflow-y-auto p-6 space-y-5" onClick={e => e.stopPropagation()}>
               {/* 头部：模板信息 + 收藏按钮 */}
               <div className="flex items-start gap-4">
-                <img src={selectedTemplate.imageUrl} className="w-28 h-36 object-cover rounded-2xl flex-shrink-0" />
+                <img
+                  src={getImageUrl(selectedTemplate.imageUrl)}
+                  className="w-28 h-36 object-cover rounded-2xl flex-shrink-0"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = 'https://placehold.co/600x800/101010/FFF?text=No+Image';
+                  }}
+                />
                 <div className="flex-1 min-w-0 space-y-2">
                   <div className="flex items-start justify-between gap-2">
                     <h3 className="text-xl font-serif italic text-white truncate">{selectedTemplate.name}</h3>
@@ -1229,6 +1291,99 @@ const App: React.FC = () => {
     );
   };
 
+  // 渲染产品图配置
+  const renderProductShot = () => {
+    return (
+      <div className="space-y-12 animate-fade-in pb-32 max-w-2xl mx-auto">
+        <div className="flex items-center justify-between">
+          <h2 className="text-4xl font-serif italic text-white">产品摄影</h2>
+          <Button variant="outline" onClick={() => setMode(AppMode.DASHBOARD)} className="px-6 py-2 rounded-xl text-[10px]">返回</Button>
+        </div>
+
+        <div className="space-y-10">
+          <SelectorGroup title="拍摄角度" icon={<IconCamera />} color="text-purple-400">
+            <div className="flex flex-wrap gap-3">
+              {[
+                { id: 'front', label: '正视图' },
+                { id: 'front_45_left', label: '左侧45°' },
+                { id: 'side_left', label: '左侧面' },
+                { id: 'perspective', label: '透视' }
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  onClick={() => {
+                    // 多选逻辑
+                    const newAngles = productShotConfig.angles.includes(opt.id as any)
+                      ? productShotConfig.angles.filter(a => a !== opt.id)
+                      : [...productShotConfig.angles, opt.id];
+                    if (newAngles.length > 0) {
+                      setProductShotConfig(p => ({ ...p, angles: newAngles as any[] }));
+                    }
+                  }}
+                  className={`px-5 py-4 rounded-2xl text-[10px] font-bold border transition-all duration-300 ${productShotConfig.angles.includes(opt.id as any)
+                    ? 'bg-purple-600 text-white border-purple-500 shadow-lg'
+                    : 'bg-zinc-900 text-zinc-500 border-white/5 hover:border-white/20'
+                    }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[9px] text-zinc-600 pl-2">可多选，批量生成不同角度</p>
+          </SelectorGroup>
+
+          <SelectorGroup title="布景与光影" icon={<IconCreative />} color="text-blue-400">
+            <Selector
+              label="背景风格"
+              options={['pure_white', 'light_gray', 'warm_beige', 'black']}
+              current={productShotConfig.backgroundColor}
+              onChange={(v: any) => setProductShotConfig(p => ({ ...p, backgroundColor: v }))}
+              labelMap={{ 'pure_white': '纯白棚拍', 'light_gray': '高级灰', 'warm_beige': '暖调米色', 'black': '深邃黑' }}
+            />
+            <div className="grid grid-cols-2 gap-8">
+              <div className="space-y-3">
+                <label className="text-[10px] text-zinc-600 uppercase tracking-widest font-black">倒影增强</label>
+                <button
+                  onClick={() => setProductShotConfig(p => ({ ...p, reflectionEnabled: !p.reflectionEnabled }))}
+                  className={`w-full py-4 rounded-2xl border text-[10px] font-bold transition-all ${productShotConfig.reflectionEnabled
+                    ? 'bg-white text-black border-white'
+                    : 'bg-zinc-900 text-zinc-500 border-white/5'
+                    }`}
+                >
+                  {productShotConfig.reflectionEnabled ? '已开启' : '已关闭'}
+                </button>
+              </div>
+              <Selector
+                label="阴影风格"
+                options={['soft', 'dramatic', 'none']}
+                current={productShotConfig.shadowStyle}
+                onChange={(v: any) => setProductShotConfig(p => ({ ...p, shadowStyle: v }))}
+                labelMap={{ 'soft': '柔和', 'dramatic': '硬朗', 'none': '无' }}
+              />
+            </div>
+          </SelectorGroup>
+
+          <Button
+            onClick={() => {
+              // 模拟提交
+              if (!currentUser) { navigate('/login'); return; }
+              setIsGenerating(true);
+              setTimeout(() => {
+                setIsGenerating(false);
+                setMode(AppMode.RESULT);
+                setGeneratedImage("https://placehold.co/1024x1366/1a1a1a/ffffff?text=Product+Shot+Result");
+              }, 2000);
+            }}
+            className="w-full h-24 rounded-[2.5rem] font-black text-[12px] shadow-2xl bg-purple-600 text-white"
+            isLoading={isGenerating}
+          >
+            开始渲染产品大片
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   // 渲染登录表单
   const renderLoginForm = () => (
     <div className="max-w-md mx-auto space-y-12 animate-fade-in pt-20">
@@ -1342,7 +1497,7 @@ const App: React.FC = () => {
                   >
                     {newTemplateImage ? (
                       <>
-                        <img src={newTemplateImage} className="w-full h-full object-cover animate-fade-in" />
+                        <img src={getImageUrl(newTemplateImage)} className="w-full h-full object-cover animate-fade-in" />
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm">
                           <div className="flex flex-col items-center gap-4">
                             <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center border border-white/20">
@@ -1454,7 +1609,7 @@ const App: React.FC = () => {
                         <span className="text-[9px] text-zinc-600">选择标签以便用户分类查找</span>
                       </div>
                       <div className="flex flex-wrap gap-2.5">
-                        {allTags.map(tag => (
+                        {allTags?.map && allTags.map(tag => (
                           <button
                             key={tag.id}
                             onClick={() => {
@@ -1694,17 +1849,23 @@ const App: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {templates.map(t => (
+                {templates?.map && templates.map(t => (
                   <div key={t.id} className="glass-card group rounded-[3rem] overflow-hidden border border-white/5 hover:border-indigo-500/30 transition-all duration-700 shadow-2xl">
                     {/* 模板图片预览 */}
                     <div className="aspect-[3/4] relative overflow-hidden">
-                      <img src={t.imageUrl} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000" />
+                      <img
+                        src={getImageUrl(t.imageUrl)}
+                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = 'https://placehold.co/600x800/101010/FFF?text=No+Image';
+                        }}
+                      />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-60 group-hover:opacity-100 transition-opacity duration-700" />
 
                       {/* 卡片顶部状态 */}
                       <div className="absolute top-6 left-6 right-6 flex justify-between items-start opacity-0 group-hover:opacity-100 transform translate-y-2 group-hover:translate-y-0 transition-all duration-700 z-30">
                         <div className="flex gap-1.5 flex-wrap max-w-[70%]">
-                          {t.tags.map(tagId => {
+                          {t.tags?.map && t.tags.map(tagId => {
                             const tag = allTags.find(tt => tt.id === tagId);
                             return tag ? (
                               <span key={tagId} className="px-3 py-1 rounded-full text-[8px] font-black text-white shadow-xl backdrop-blur-md" style={{ backgroundColor: `${tag.color}cc` }}>
@@ -1898,7 +2059,7 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {allTags.map(tag => (
+                  {allTags?.map && allTags.map(tag => (
                     <div
                       key={tag.id}
                       className="glass-card group p-6 rounded-[2.5rem] flex items-center justify-between border border-white/5 hover:border-white/20 transition-all duration-500 shadow-xl"
@@ -2044,6 +2205,41 @@ const App: React.FC = () => {
                     <p className="text-zinc-600 text-[10px] uppercase tracking-widest font-black">Account Settings</p>
                   </div>
 
+                  {/* 生成设置 */}
+                  <div className="ios-card p-8 space-y-6">
+                    <div className="space-y-2">
+                      <h3 className="text-[11px] text-white uppercase tracking-widest font-black">生成设置</h3>
+                      <p className="text-zinc-600 text-[10px]">调整AI图片生成的相关参数</p>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-1">
+                          <p className="text-sm text-white font-medium">最大并行数</p>
+                          <p className="text-[10px] text-zinc-500">同时处理的任务数量，数值越大生成越快</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        {[1, 2, 3, 4, 5].map(n => (
+                          <button
+                            key={n}
+                            onClick={() => setUserSettings(prev => ({ ...prev, maxConcurrency: n as 1 | 2 | 3 | 4 | 5 }))}
+                            className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${userSettings.maxConcurrency === n
+                              ? 'bg-white text-black'
+                              : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 border border-white/5'
+                              }`}
+                          >
+                            {n}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[9px] text-zinc-600 text-center">
+                        当前设置: {userSettings.maxConcurrency} 个任务同时处理
+                        {userSettings.maxConcurrency >= 4 && ' (高并发可能影响稳定性)'}
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="ios-card p-8 space-y-8">
                     <div className="space-y-2">
                       <h3 className="text-[11px] text-white uppercase tracking-widest font-black">修改密码</h3>
@@ -2159,7 +2355,7 @@ const App: React.FC = () => {
                           <div key={img.id} className="group relative rounded-xl lg:rounded-[2rem] overflow-hidden border border-white/5 hover:border-white/20 transition-all duration-500 bg-zinc-900/50">
                             {/* 图片区域 */}
                             <div className="aspect-[3/4] relative">
-                              <img src={img.thumbnailUrl || img.url} className="w-full h-full object-cover" />
+                              <img src={getImageUrl(img.thumbnailUrl || img.url)} className="w-full h-full object-cover" />
 
                               {/* 公开状态标识 */}
                               <div className="absolute top-4 right-4">
@@ -2205,7 +2401,7 @@ const App: React.FC = () => {
                             {/* 操作按钮 */}
                             <div className="p-4 pt-0 flex flex-wrap gap-2">
                               <button
-                                onClick={() => handleDownload(img.url, `lyra-${img.id}.png`)}
+                                onClick={() => handleDownload(getImageUrl(img.url)!, `lyra-${img.id}.png`)}
                                 className="flex-1 py-2 rounded-xl bg-white text-black text-[10px] font-bold text-center hover:bg-zinc-200 transition-colors"
                               >
                                 ⬇️ 下载
@@ -2258,11 +2454,11 @@ const App: React.FC = () => {
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-8">
-                        {publicGallery.map(img => (
+                        {publicGallery?.map && publicGallery.map(img => (
                           <div key={img.id} className="group relative rounded-xl lg:rounded-[2rem] overflow-hidden border border-white/5 hover:border-white/20 transition-all duration-500 bg-zinc-900/50">
                             {/* 图片区域 */}
                             <div className="aspect-[3/4] relative">
-                              <img src={img.thumbnailUrl || img.url} className="w-full h-full object-cover" />
+                              <img src={getImageUrl(img.thumbnailUrl || img.url)} className="w-full h-full object-cover" />
 
                               {/* 作者标识 */}
                               <div className="absolute top-4 left-4">
@@ -2302,7 +2498,7 @@ const App: React.FC = () => {
                             {/* 操作按钮 */}
                             <div className="p-4 pt-0 flex gap-2">
                               <button
-                                onClick={() => handleDownload(img.url, `lyra-${img.id}.png`)}
+                                onClick={() => handleDownload(getImageUrl(img.url)!, `lyra-${img.id}.png`)}
                                 className="flex-1 py-2 rounded-xl bg-white text-black text-[10px] font-bold text-center hover:bg-zinc-200 transition-colors"
                               >
                                 ⬇️ 下载
@@ -2321,17 +2517,41 @@ const App: React.FC = () => {
                 <div className="xl:col-span-7">
                   <div className="aspect-[3/4] rounded-[3.5rem] overflow-hidden border border-white/5 bg-[#080808] flex items-center justify-center relative shadow-2xl">
                     {!imageBase64 ? (
-                      <div className="p-12 text-center space-y-12 animate-fade-in">
-                        <h1 className="text-7xl font-black font-serif italic text-white leading-tight tracking-tight">上传您的资产</h1>
-                        <div className="flex flex-col gap-4 max-w-xs mx-auto">
-                          <Button onClick={() => fileInputRef.current?.click()} className="rounded-3xl h-20 text-sm"><IconUpload /> <span className="ml-3">上传眼镜 PNG/JPG</span></Button>
-                          <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
-                          <p className="text-zinc-600 text-[9px] uppercase tracking-widest">请确保眼镜主体清晰，背景尽可能纯净</p>
+                      <div className="max-w-2xl mx-auto text-center space-y-12 animate-fade-in py-20">
+                        <div className="space-y-4">
+                          <h1 className="text-5xl lg:text-7xl font-black font-serif italic text-white leading-tight">开始创作</h1>
+                          <p className="text-zinc-500 text-sm">上传眼镜产品图，AI为您生成专业模特佩戴效果图</p>
+                        </div>
+
+                        <div
+                          className="relative aspect-[4/3] max-w-lg mx-auto rounded-[2rem] border-2 border-dashed border-white/20 bg-zinc-900/30 flex flex-col items-center justify-center gap-6 cursor-pointer hover:border-white/40 hover:bg-zinc-900/50 transition-all group"
+                          onClick={() => fileInputRef.current?.click()}
+                        >
+                          <div className="w-20 h-20 rounded-full bg-white/5 flex items-center justify-center group-hover:bg-white/10 transition-colors">
+                            <IconUpload className="w-10 h-10 text-zinc-400 group-hover:text-white transition-colors" />
+                          </div>
+                          <div className="space-y-2">
+                            <p className="text-lg font-bold text-white">点击上传眼镜图片</p>
+                            <p className="text-[11px] text-zinc-500">支持 PNG、JPG、WEBP 格式</p>
+                          </div>
+                          <input
+                            type="file"
+                            ref={fileInputRef}
+                            className="hidden"
+                            accept="image/png,image/jpeg,image/jpg,image/webp"
+                            onChange={handleFileChange}
+                          />
+                        </div>
+
+                        <div className="flex flex-wrap justify-center gap-6 text-[10px] text-zinc-600 uppercase tracking-widest">
+                          <span>✓ 清晰的眼镜主体</span>
+                          <span>✓ 干净的背景</span>
+                          <span>✓ 正面或侧面角度</span>
                         </div>
                       </div>
                     ) : (
                       <>
-                        <img src={generatedImage || previewUrl!} className={`max-w-full max-h-full object-contain ${isGenerating ? 'opacity-30 blur-3xl grayscale transition-all duration-1000' : 'transition-all duration-700'}`} />
+                        <img src={getImageUrl(generatedImage || previewUrl!)} className={`max-w-full max-h-full object-contain ${isGenerating ? 'opacity-30 blur-3xl grayscale transition-all duration-1000' : 'transition-all duration-700'}`} />
                         {isGenerating && (
                           <div className="absolute inset-0 flex flex-col items-center justify-center gap-10 bg-black/40 backdrop-blur-3xl px-12 text-center">
                             <div className="relative">
@@ -2365,18 +2585,20 @@ const App: React.FC = () => {
                             onClick={() => fileInputRef.current?.click()}
                             className="px-8 py-4 bg-white text-black rounded-2xl font-bold hover:bg-zinc-200 transition-colors"
                           >
-                            立即上传
+                            立即上传 (支持WEBP)
                           </button>
                         </div>
                       ) : (
                         <div className="grid gap-6">
                           <FeatureCard title="商业模特试戴" description="一键配置模特属性，支持物理光影锁定与折射追踪。" icon={<IconModel />} onClick={() => setMode(AppMode.MODEL_CONFIG)} />
+                          <FeatureCard title="静物产品摄影" description="专业影棚布光，支持多角度与材质增强渲染。" icon={<IconCamera />} onClick={() => setMode(AppMode.PRODUCT_SHOT)} />
                           <FeatureCard title="从模板生成" description="套用高质量大师模板，一键获得品牌级视觉效果。" icon={<IconPoster />} onClick={() => navigate('/templates')} />
                         </div>
                       )}
                     </div>
                   )}
                   {mode === AppMode.MODEL_CONFIG && renderConfig()}
+                  {mode === AppMode.PRODUCT_SHOT && renderProductShot()}
                   {mode === AppMode.RESULT && generatedImage && (
                     <div className="space-y-8 animate-fade-in">
                       <h2 className="text-5xl font-serif italic text-white">渲染完成</h2>

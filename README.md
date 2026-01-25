@@ -2,7 +2,7 @@
 
 ![Lyra Studio](./public/favicon.svg)
 
-基于 Google Gemini 2.0 FlashMultimodal 模型的智能眼镜摄影与设计工坊。通过 AI 技术，为眼镜产品生成高质量的商业摄影图、试戴效果图，并提供创意设计生成功能。
+基于 Google Gemini3 FlashMultimodal 模型的智能眼镜摄影与设计工坊。通过 AI 技术，为眼镜产品生成高质量的商业摄影图、试戴效果图，并提供创意设计生成功能。
 
 ## ✨ 核心功能
 
@@ -38,7 +38,7 @@
 - **平台**：Cloudflare Workers (Serverless)
 - **数据库**：Cloudflare D1 (SQLite at Edge)
 - **对象存储**：Cloudflare R2 (图片存储)
-- **AI模型**：Google Gemini 2.0 Flash (via `@google/genai`)
+- **AI模型**：Google Gemini3 Flash (via `@google/genai`)
 
 ## 🚀 快速开始
 

@@ -10,6 +10,8 @@ export interface AuthState {
   token: string | null;
 }
 
+
+
 export enum AppMode {
   DASHBOARD = 'DASHBOARD',
   MODEL_SHOT = 'MODEL_SHOT',
@@ -17,7 +19,8 @@ export enum AppMode {
   POSTER_GENERATION = 'POSTER_GENERATION',
   PRESET_STYLES = 'PRESET_STYLES',
   RESULT = 'RESULT',
-  ADMIN = 'ADMIN'
+  ADMIN = 'ADMIN',
+  PRODUCT_SHOT = 'PRODUCT_SHOT'
 }
 
 export enum NavTab {
@@ -72,6 +75,7 @@ export interface Tag {
 export interface TemplateItem {
   id: string;
   imageUrl: string;
+  thumbnailUrl?: string;
   name: string;
   description: string;
   prompt: string;                    // 核心提示词，可包含 {{variable}} 占位符（兼容旧版）
@@ -238,6 +242,74 @@ export interface BatchGenerateConfig {
     pose?: string;
   }>;
   aspectRatio: string;
+}
+
+// 产品图角度类型
+export type ProductAngle = 'front' | 'front_45_left' | 'front_45_right' | 'side_left' | 'side_right' | 'top' | 'perspective';
+
+// 产品图背景颜色
+export type ProductBackground =
+  | 'pure_white'      // 纯白
+  | 'light_gray'      // 浅灰
+  | 'warm_beige'      // 暖米色
+  | 'light_blue'      // 浅蓝
+  | 'black'           // 纯黑
+  | 'gradient_gray';  // 灰色渐变
+
+// 产品图配置
+export interface ProductShotConfig {
+  angles: ProductAngle[];
+  backgroundColor: ProductBackground;
+  reflectionEnabled: boolean;
+  shadowStyle: 'none' | 'soft' | 'dramatic';
+  outputSize: '1K' | '2K' | '4K';
+  aspectRatio: '1:1' | '4:3' | '3:4';
+}
+
+// 全局用户设置
+export interface UserSettings {
+  maxConcurrency: 1 | 2 | 3 | 4 | 5;  // 全局并行处理数量
+}
+
+// 产品图生成结果
+export interface ProductShotResult {
+  angle: ProductAngle;
+  imageUrl: string;
+  thumbnailUrl?: string;
+  imageId: string;
+}
+
+// 批次进度类型
+export interface BatchProgress {
+  total: number;
+  completed: number;
+  failed: number;
+  processing: number;
+  pending: number;
+}
+
+// 产品图批次响应
+export interface ProductShotBatchResponse {
+  success: boolean;
+  batchId: string;
+  taskIds: string[];
+  totalImages: number;
+  message: string;
+}
+
+// 产品图批次状态
+export interface ProductShotBatchStatus {
+  success: boolean;
+  batchId: string;
+  progress: BatchProgress;
+  tasks: Array<{
+    id: string;
+    angle: string;
+    status: string;
+    errorMessage?: string;
+  }>;
+  results: ProductShotResult[];
+  isCompleted: boolean;
 }
 
 // 提示词模块

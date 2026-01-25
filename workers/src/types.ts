@@ -28,6 +28,7 @@ export interface Template {
   name: string;
   description: string;
   imageUrl: string;
+  thumbnailUrl: string | null;
   prompt: string;
   malePrompt: string | null;
   femalePrompt: string | null;
@@ -70,15 +71,25 @@ export interface GeneratedImage {
 export interface Task {
   id: string;
   userId: number;
-  type: 'generate' | 'batch';
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  type: 'generate' | 'batch' | 'product_shot';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   inputData: Record<string, unknown>;
   outputData: Record<string, unknown> | null;
   errorMessage: string | null;
+  batchId: string | null;
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
+}
+
+// 批次进度类型
+export interface BatchProgress {
+  total: number;
+  completed: number;
+  failed: number;
+  processing: number;
+  pending: number;
 }
 
 // 资源类型

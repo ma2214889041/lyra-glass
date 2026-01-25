@@ -12,8 +12,7 @@
     "tail": "wrangler tail"
   },
   "dependencies": {
-    "hono": "^4.0.0",
-    "@google/genai": "^1.33.0"
+    "hono": "^4.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240117.0",

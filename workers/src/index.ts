@@ -8,11 +8,12 @@ import {
 import {
   register, login, logout, changePassword, validateSession, extractToken
 } from './auth';
-import { saveImage, deleteImage, saveAsset, deleteAsset, getImage, cleanupOldImages } from './storage';
+import { saveImage, deleteImage, saveAsset, deleteAsset, getImage, cleanupOldImages, cleanupOrphanedAssets } from './storage';
 import {
   generateEyewearImage, generatePosterImage, getPromptSuggestions,
-  generateFromTemplate, optimizePrompt
+  generateFromTemplate, optimizePrompt, generateProductShot
 } from './gemini';
+import { processTask, processPendingTasks, processBatchTasks } from './task_processor';
 
 // 扩展 Hono Context
 type Variables = {
@@ -22,10 +23,31 @@ type Variables = {
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // CORS 中间件
+// CORS 中间件
 app.use('*', cors({
-  origin: '*',
+  origin: (origin) => {
+    // 允许的域名列表
+    const allowedOrigins = [
+      'https://glass.lyrai.eu',
+      'http://localhost:5173',
+      'http://localhost:3000'
+    ];
+
+    // 如果在允许列表中，直接返回
+    if (allowedOrigins.includes(origin)) return origin;
+
+    // 允许 Cloudflare Pages 预览域名 (*.lyra-cwg.pages.dev)
+    if (origin.endsWith('.lyra-cwg.pages.dev') || origin.endsWith('.pages.dev')) {
+      return origin;
+    }
+
+    return origin; // 暂时允许所有，方便调试，之后应收紧
+  },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type', 'Authorization', 'x-goog-api-key'],
+  exposeHeaders: ['Content-Length', 'X-Kuma-Revision'],
+  maxAge: 600,
+  credentials: true,
 }));
 
 // 认证中间件
@@ -139,7 +161,7 @@ app.post('/api/auth/login', async (c) => {
 });
 
 app.post('/api/auth/logout', authMiddleware, async (c) => {
-  const token = extractToken(c.req.header('Authorization'))!;
+  const token = extractToken(c.req.header('Authorization') || null)!;
   await logout(c.env.DB, token);
   return c.json({ success: true });
 });
@@ -249,8 +271,11 @@ app.delete('/api/tags/:id', adminMiddleware, async (c) => {
 app.get('/api/templates', async (c) => {
   try {
     const tag = c.req.query('tag');
-    const templates = await templateDb.getAll(c.env.DB, tag || undefined);
-    return c.json(templates);
+    const page = parseInt(c.req.query('page') || '1', 10);
+    const limit = parseInt(c.req.query('limit') || '12', 10);
+
+    const result = await templateDb.getAll(c.env.DB, { tagFilter: tag, page, limit });
+    return c.json(result);
   } catch (error) {
     console.error('Get templates error:', error);
     return c.json({ error: '获取模板失败' }, 500);
@@ -308,13 +333,46 @@ app.post('/api/templates', adminMiddleware, async (c) => {
 app.put('/api/templates/:id', adminMiddleware, async (c) => {
   try {
     const updates = await c.req.json();
-    const updated = await templateDb.update(c.env.DB, c.req.param('id'), updates);
-    if (!updated) {
+    const id = c.req.param('id');
+
+    // 获取当前模板信息，以便后续对比图片 URL
+    const currentTemplate = await templateDb.getById(c.env.DB, id);
+    if (!currentTemplate) {
       return c.json({ error: '模板不存在' }, 404);
     }
+
+    let oldImageUrl = currentTemplate.imageUrl;
+
+    // 如果更新包含大图片，先上传到 R2
+    if (updates.imageUrl && (updates.imageUrl.startsWith('data:image/') || updates.imageUrl.length > 1000)) {
+      const assetName = updates.name || `template_${id}`;
+      const result = await saveAsset(c.env.R2, updates.imageUrl, assetName);
+      updates.imageUrl = result.url;
+    }
+
+    const updated = await templateDb.update(c.env.DB, id, updates);
+    if (!updated) {
+      return c.json({ error: '模板更新失败' }, 500); // Should not happen if getById succeeded
+    }
+
+    // 检查图片是否已更改，如果是，则删除旧图片
+    // 条件：
+    // 1. 旧图存在 (oldImageUrl)
+    // 2. 新图已上传 (updates.imageUrl)
+    // 3. URLs 不同
+    if (oldImageUrl && updates.imageUrl && oldImageUrl !== updates.imageUrl) {
+      console.log(`[Template Update] Image replaced. Deleting old image: ${oldImageUrl}`);
+      // 异步删除旧图，不阻塞响应
+      c.executionCtx.waitUntil(deleteAsset(c.env.R2, oldImageUrl));
+    }
+
     return c.json(updated);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Update template error:', error);
+    // 捕获 D1 大小限制错误
+    if (error.message && error.message.includes('SQLITE_TOOBIG')) {
+      return c.json({ error: '图片过大，请使用压缩后的图片' }, 400);
+    }
     return c.json({ error: '更新模板失败' }, 500);
   }
 });
@@ -340,6 +398,16 @@ app.delete('/api/templates/:id', adminMiddleware, async (c) => {
   } catch (error) {
     console.error('Delete template error:', error);
     return c.json({ error: '删除模板失败' }, 500);
+  }
+});
+
+app.post('/api/admin/cleanup-orphans', adminMiddleware, async (c) => {
+  try {
+    const result = await cleanupOrphanedAssets(c.env.R2, c.env.DB);
+    return c.json(result);
+  } catch (error: any) {
+    console.error('Cleanup orphans error:', error);
+    return c.json({ error: error.message || '清理失败' }, 500);
   }
 });
 
@@ -707,6 +775,9 @@ app.post('/api/tasks/generate', authMiddleware, async (c) => {
 
     const stats = await taskDb.getQueueStats(c.env.DB);
 
+    // Trigger background processing
+    c.executionCtx.waitUntil(processTask(c.env, task.id));
+
     return c.json({
       success: true,
       taskId: task.id,
@@ -717,6 +788,155 @@ app.post('/api/tasks/generate', authMiddleware, async (c) => {
   } catch (error) {
     console.error('Create task error:', error);
     return c.json({ error: '创建任务失败' }, 500);
+  }
+});
+
+app.post('/api/tasks/batch', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const { imageBase64, basePrompt, combinations, aspectRatio, templateId, templateName, concurrency: reqConcurrency } = await c.req.json();
+
+    if (!imageBase64 || !combinations || !Array.isArray(combinations)) {
+      return c.json({ error: '缺少必要参数' }, 400);
+    }
+
+    const userId = user.userId ?? 0;
+    const taskId = crypto.randomUUID();
+
+    // 获取用户指定的并行数（1-5），默认3
+    const concurrency = Math.min(5, Math.max(1, reqConcurrency || 3));
+
+    // Create the main batch task
+    const task = await taskDb.create(c.env.DB, taskId, userId, 'batch', {
+      imageBase64,
+      basePrompt,
+      combinations,
+      aspectRatio: aspectRatio || '3:4',
+      templateId,
+      templateName,
+      concurrency  // 保存并行数设置
+    });
+
+    const stats = await taskDb.getQueueStats(c.env.DB);
+
+    // Trigger background processing
+    c.executionCtx.waitUntil(processTask(c.env, task.id));
+
+    return c.json({
+      success: true,
+      taskId: task.id,
+      status: task.status,
+      queuePosition: stats.pending,
+      message: '批量任务已创建，正在后台处理'
+    });
+  } catch (error) {
+    console.error('Create batch task error:', error);
+    return c.json({ error: '创建批量任务失败' }, 500);
+  }
+});
+
+// ========== 产品图生成任务 API ==========
+app.post('/api/tasks/product-shot', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const { imageBase64, angles, config, concurrency: reqConcurrency } = await c.req.json();
+
+    if (!imageBase64 || !angles || !Array.isArray(angles) || angles.length === 0) {
+      return c.json({ error: '缺少必要参数' }, 400);
+    }
+
+    const userId = user.userId ?? 0;
+    const batchId = crypto.randomUUID();
+    const taskIds: string[] = [];
+
+    const taskConfig = {
+      backgroundColor: config?.backgroundColor || 'pure_white',
+      reflectionEnabled: config?.reflectionEnabled ?? false,  // 默认关闭倒影
+      shadowStyle: config?.shadowStyle || 'none',             // 默认无阴影
+      outputSize: config?.outputSize || '1K',
+      aspectRatio: config?.aspectRatio || '1:1'
+    };
+
+    // 获取用户指定的并行数（1-5），默认3
+    const concurrency = Math.min(5, Math.max(1, reqConcurrency || 3));
+
+    // 为每个角度创建独立任务
+    for (const angle of angles) {
+      const taskId = crypto.randomUUID();
+      await taskDb.create(c.env.DB, taskId, userId, 'product_shot', {
+        imageBase64,
+        angle,
+        config: taskConfig
+      }, batchId);
+      taskIds.push(taskId);
+    }
+
+    const stats = await taskDb.getQueueStats(c.env.DB);
+
+    // 触发并发处理，使用用户指定的并行数
+    c.executionCtx.waitUntil(processBatchTasks(c.env, batchId, concurrency));
+
+    return c.json({
+      success: true,
+      batchId,
+      taskIds,
+      status: 'pending',
+      queuePosition: stats.pending,
+      totalImages: angles.length,
+      message: `正在生成 ${angles.length} 张产品图`
+    });
+  } catch (error) {
+    console.error('Create product shot batch error:', error);
+    return c.json({ error: '创建产品图任务失败' }, 500);
+  }
+});
+
+// 获取批次状态
+app.get('/api/tasks/batch/:batchId', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const batchId = c.req.param('batchId');
+
+    const tasks = await taskDb.getByBatchId(c.env.DB, batchId);
+
+    if (tasks.length === 0) {
+      return c.json({ error: '批次不存在' }, 404);
+    }
+
+    // 验证所有任务属于当前用户
+    const userId = user.userId ?? 0;
+    if (tasks[0].userId !== userId) {
+      return c.json({ error: '无权访问此批次' }, 403);
+    }
+
+    const progress = await taskDb.getBatchProgress(c.env.DB, batchId);
+
+    // 聚合已完成任务的结果
+    const results = tasks
+      .filter(t => t.status === 'completed' && t.outputData)
+      .map(t => ({
+        angle: t.outputData?.angle || t.inputData.angle,
+        imageUrl: t.outputData?.imageUrl,
+        thumbnailUrl: t.outputData?.thumbnailUrl,
+        imageId: t.outputData?.imageId
+      }));
+
+    return c.json({
+      success: true,
+      batchId,
+      progress,
+      tasks: tasks.map(t => ({
+        id: t.id,
+        angle: t.inputData.angle,
+        status: t.status,
+        errorMessage: t.errorMessage
+      })),
+      results,
+      isCompleted: progress.pending === 0 && progress.processing === 0
+    });
+  } catch (error) {
+    console.error('Get batch error:', error);
+    return c.json({ error: '获取批次状态失败' }, 500);
   }
 });
 
@@ -758,16 +978,42 @@ app.get('/api/tasks', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
     const active = c.req.query('active');
+    const completed = c.req.query('completed');
     const userId = user.userId ?? 0;
 
-    const tasks = active === 'true'
-      ? await taskDb.getActiveTasks(c.env.DB, userId)
-      : await taskDb.getByUserId(c.env.DB, userId, 50);
+    let tasks;
+    if (active === 'true') {
+      tasks = await taskDb.getActiveTasks(c.env.DB, userId);
+    } else if (completed === 'true') {
+      tasks = await taskDb.getCompletedTasks(c.env.DB, userId, 50);
+    } else {
+      tasks = await taskDb.getByUserId(c.env.DB, userId, 50);
+    }
 
     return c.json({ success: true, tasks });
   } catch (error) {
     console.error('Get tasks error:', error);
     return c.json({ error: '获取任务列表失败' }, 500);
+  }
+});
+
+// 取消任务
+app.post('/api/tasks/:taskId/cancel', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const taskId = c.req.param('taskId');
+    const userId = user.userId ?? 0;
+
+    const result = await taskDb.cancel(c.env.DB, taskId, userId);
+
+    if (!result.success) {
+      return c.json({ success: false, error: result.message }, 400);
+    }
+
+    return c.json({ success: true, message: result.message });
+  } catch (error) {
+    console.error('Cancel task error:', error);
+    return c.json({ error: '取消任务失败' }, 500);
   }
 });
 
@@ -927,6 +1173,12 @@ export default {
     const resetTasks = await taskDb.resetStuckTasks(env.DB);
     if (resetTasks > 0) {
       console.log(`[Cron] Reset ${resetTasks} stuck tasks`);
+    }
+
+    // 处理遗留的 Pending 任务
+    const processedCount = await processPendingTasks(env);
+    if (processedCount > 0) {
+      console.log(`[Cron] Processed ${processedCount} pending tasks`);
     }
   }
 };
